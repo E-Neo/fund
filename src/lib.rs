@@ -1,6 +1,4 @@
-pub mod bank;
-pub mod crawler;
-pub mod market;
-pub mod person;
+pub mod error;
 pub mod repository;
-pub mod world;
+pub mod rules;
+pub mod server;

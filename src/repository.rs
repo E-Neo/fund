@@ -1,212 +1,337 @@
-use crate::{bank, world};
-use chrono::{Duration, NaiveDate};
-use rust_decimal::Decimal;
-use std::collections::VecDeque;
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use crate::error::{Error, Result};
+use chrono::NaiveDate;
 
-pub enum Message {
-    Step {
-        world_channel: Sender<world::Message>,
+#[derive(Debug)]
+pub enum Order {
+    Investment {
         date: NaiveDate,
-        net_asset_value: Decimal,
-        next_date: NaiveDate,
+        net_asset_value: f64,
+        investment: f64,
     },
-    Buy {
-        bank_channel: Sender<bank::Message>,
-        amount: Decimal,
+    Redemption {
+        date: NaiveDate,
+        net_asset_value: f64,
+        redemption: f64,
     },
-    BankToRepositoryOk(u64),
-    BankToRepositoryErr(u64),
-    Sell {
-        bank_channel: Sender<bank::Message>,
-        share: Decimal,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Transaction {
+    Investment {
+        date: NaiveDate,
+        net_asset_value: f64,
+        investment: f64,
+        share: f64,
+        fee: f64,
     },
-    RepositoryToBankOk(u64),
-    RepositoryToBankErr(u64),
-    Stop,
+    Redemption {
+        date: NaiveDate,
+        net_asset_value: f64,
+        redemption: f64,
+        money: f64,
+        fee: f64,
+    },
 }
 
-pub struct TransactionBuy {
-    id: u64,
-    finish_date: NaiveDate,
-    amount: Decimal, // doesnot include fee
-    share: Decimal,
+pub trait Rule {
+    fn fee(&mut self, order: Order) -> f64;
 }
 
-pub struct TransactionSell {
-    id: u64,
-    finish_date: NaiveDate,
-    amount: Decimal,
-    bank_channel: Sender<bank::Message>,
+impl std::fmt::Debug for dyn Rule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "InvestmentRule {:?}", self as *const _)
+    }
 }
 
-struct QueueItem {
-    date: NaiveDate,
-    share: Decimal,
+impl<F> Rule for F
+where
+    F: Fn(Order) -> f64,
+{
+    fn fee(&mut self, order: Order) -> f64 {
+        self(order)
+    }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct DailyInfo {
+    transaction_id: usize,
+    holding_price: f64,
+    holding_share: f64,
+    cumulative_investment: f64,
+    cumulative_redemption: f64,
+}
+
+impl DailyInfo {
+    pub fn transaction_id(&self) -> Option<usize> {
+        if self.transaction_id == 0 {
+            None
+        } else {
+            Some(self.transaction_id - 1)
+        }
+    }
+
+    pub fn holding_price(&self) -> f64 {
+        self.holding_price
+    }
+
+    pub fn holding_share(&self) -> f64 {
+        self.holding_share
+    }
+
+    pub fn cumulative_investment(&self) -> f64 {
+        self.cumulative_investment
+    }
+
+    pub fn cumulative_redemption(&self) -> f64 {
+        self.cumulative_redemption
+    }
+
+    pub fn cumulative_income(&self) -> f64 {
+        self.cumulative_redemption - self.cumulative_investment
+    }
+}
+
+#[derive(Debug)]
 pub struct Repository {
-    purchase_fee: Box<dyn Fn(&Repository, Decimal) -> Decimal>,
-    redemption_fee: Box<dyn Fn(&Repository, Duration, Decimal) -> Decimal>,
-    date: NaiveDate,
-    net_asset_value: Decimal,
-    next_date: NaiveDate,
-    holding_share: Decimal,
-    invested_money: Decimal,
-    tx: Sender<Message>,
-    rx: Receiver<Message>,
-    next_transaction_id: u64,
-    purchase_queue: VecDeque<TransactionBuy>,
-    redemption_queue: VecDeque<TransactionSell>,
-    queue: VecDeque<QueueItem>,
+    rule: Box<dyn Rule>,
+    net_asset_value_history: Vec<(NaiveDate, f64)>,
+    transactions: Vec<Transaction>,
+    daily_infos: Vec<DailyInfo>,
 }
 
 impl Repository {
-    pub fn new(
-        purchase_fee: Box<dyn Fn(&Repository, Decimal) -> Decimal>,
-        redemption_fee: Box<dyn Fn(&Repository, Duration, Decimal) -> Decimal>,
-        date: NaiveDate,
-        net_asset_value: Decimal,
-        next_date: NaiveDate,
-    ) -> Self {
-        let (tx, rx) = channel(8);
-        Self {
-            purchase_fee,
-            redemption_fee,
-            date,
-            net_asset_value,
-            next_date,
-            holding_share: Decimal::new(0, 0),
-            invested_money: Decimal::new(0, 0),
-            tx,
-            rx,
-            next_transaction_id: 0,
-            purchase_queue: VecDeque::new(),
-            redemption_queue: VecDeque::new(),
-            queue: VecDeque::new(),
+    pub fn start(
+        rule: Box<dyn Rule>,
+        net_asset_value_history: Vec<(NaiveDate, f64)>,
+    ) -> Result<(Self, (NaiveDate, f64))> {
+        if let Some(&date_nav) = net_asset_value_history.first() {
+            Ok((
+                Repository {
+                    rule,
+                    net_asset_value_history,
+                    transactions: vec![],
+                    daily_infos: vec![DailyInfo {
+                        transaction_id: 0,
+                        holding_price: 0.0,
+                        holding_share: 0.0,
+                        cumulative_investment: 0.0,
+                        cumulative_redemption: 0.0,
+                    }],
+                },
+                date_nav,
+            ))
+        } else {
+            Err(Error::Insufficient)
         }
     }
 
-    pub fn channel(&self) -> Sender<Message> {
-        self.tx.clone()
+    pub fn len(&self) -> usize {
+        self.net_asset_value_history.len()
     }
 
-    fn get_transaction_id(&mut self) -> u64 {
-        let id = self.next_transaction_id;
-        self.next_transaction_id += 1;
-        id
+    pub fn daily_infos(&self) -> &[DailyInfo] {
+        &self.daily_infos[1..]
     }
 
-    async fn process_step(
-        &mut self,
-        mut world_channel: Sender<world::Message>,
-        date: NaiveDate,
-        net_asset_value: Decimal,
-        next_date: NaiveDate,
-    ) {
-        self.date = date;
-        self.net_asset_value = net_asset_value;
-        self.next_date = next_date;
-        while let Some(ts) = self.redemption_queue.front() {
-            if ts.finish_date > self.date {
-                break;
+    pub fn transactions(&self) -> &[Transaction] {
+        &self.transactions
+    }
+
+    pub fn pass(&mut self) -> Result<(NaiveDate, f64)> {
+        if self.net_asset_value_history.len() < self.daily_infos.len() {
+            Err(Error::Insufficient)
+        } else {
+            let mut info = self.daily_infos.last().unwrap().clone();
+            info.transaction_id = 0;
+            self.daily_infos.push(info);
+            if self.net_asset_value_history.len() == self.daily_infos.len() - 1 {
+                Err(Error::Overflow)
             } else {
-                let mut ts = self.redemption_queue.pop_front().unwrap();
-                let _ = ts
-                    .bank_channel
-                    .send(bank::Message::RepositoryToBank(
-                        self.channel(),
-                        ts.id,
-                        ts.amount,
-                    ))
-                    .await;
+                Ok(self.net_asset_value_history[self.daily_infos.len() - 1])
             }
         }
-        let _ = world_channel.send(world::Message::RepositoryStepped).await;
     }
 
-    async fn process_buy(&mut self, mut bank_channel: Sender<bank::Message>, amount: Decimal) {
-        let id = self.get_transaction_id();
-        let _ = bank_channel
-            .send(bank::Message::BankToRepository(self.channel(), id, amount))
-            .await;
-        self.purchase_queue.push_back(TransactionBuy {
-            id,
-            finish_date: self.next_date,
-            amount,
-            share: (amount - (*self.purchase_fee)(self, amount)) / self.net_asset_value,
-        });
-    }
-
-    async fn process_bank_to_repository_ok(&mut self, id: u64) {
-        if let Some(idx) = self.purchase_queue.iter().position(|tb| tb.id == id) {
-            let tb = self.purchase_queue.remove(idx).unwrap();
-            self.holding_share += tb.share;
-            self.invested_money += tb.amount;
-            self.queue.push_back(QueueItem {
-                date: tb.finish_date,
-                share: tb.share,
-            })
-        }
-    }
-
-    async fn process_sell(&mut self, bank_channel: Sender<bank::Message>, share: Decimal) {
-        if share <= self.holding_share {
-            let mut tmp_share = share;
-            let mut amount = Decimal::new(0, 0);
-            let mut fee = Decimal::new(0, 0);
-            while tmp_share != Decimal::new(0, 0) {
-                let item = self.queue.pop_front().unwrap();
-                if item.share <= tmp_share {
-                    fee += (*self.redemption_fee)(self, self.next_date - item.date, item.share);
-                    amount += item.share * self.net_asset_value - fee;
-                    tmp_share -= item.share;
-                } else {
-                    self.queue.push_front(QueueItem {
-                        date: item.date,
-                        share: item.share - tmp_share,
-                    });
-                    fee += (*self.redemption_fee)(self, self.next_date - item.date, tmp_share);
-                    amount += tmp_share * self.net_asset_value - fee;
-                    tmp_share = Decimal::new(0, 0);
-                }
-            }
-            let id = self.get_transaction_id();
-            self.redemption_queue.push_back(TransactionSell {
-                id,
-                finish_date: self.next_date,
-                amount,
-                bank_channel,
+    pub fn invest(&mut self, investment: f64) -> Result<(NaiveDate, f64)> {
+        if self.net_asset_value_history.len() < self.daily_infos.len() {
+            Err(Error::Insufficient)
+        } else {
+            let &(date, net_asset_value) = self
+                .net_asset_value_history
+                .get(self.daily_infos.len() - 1)
+                .unwrap();
+            let fee = self.rule.fee(Order::Investment {
+                date,
+                net_asset_value,
+                investment,
             });
+            let share = (investment - fee) / net_asset_value;
+            self.transactions.push(Transaction::Investment {
+                date,
+                net_asset_value,
+                investment,
+                share,
+                fee,
+            });
+            let mut info = self.daily_infos.last().unwrap().clone();
+            info.transaction_id = self.transactions.len();
+            info.holding_price = (info.holding_price * info.holding_share + investment)
+                / (info.holding_share + share);
+            info.holding_share += share;
+            info.cumulative_investment += investment;
+            self.daily_infos.push(info);
+            if self.net_asset_value_history.len() == self.daily_infos.len() - 1 {
+                Err(Error::Overflow)
+            } else {
+                Ok(self.net_asset_value_history[self.daily_infos.len() - 1])
+            }
         }
     }
 
-    pub async fn process(&mut self) {
-        loop {
-            match self.rx.recv().await.unwrap() {
-                Message::Step {
-                    world_channel,
-                    date,
-                    net_asset_value,
-                    next_date,
-                } => {
-                    self.process_step(world_channel, date, net_asset_value, next_date)
-                        .await
-                }
-                Message::Buy {
-                    bank_channel,
-                    amount,
-                } => self.process_buy(bank_channel, amount).await,
-                Message::BankToRepositoryOk(id) => self.process_bank_to_repository_ok(id).await,
-                Message::BankToRepositoryErr(_) => (),
-                Message::Sell {
-                    bank_channel,
-                    share,
-                } => self.process_sell(bank_channel, share).await,
-                Message::RepositoryToBankOk(_) => (),
-                Message::RepositoryToBankErr(_) => (),
-                Message::Stop => break,
+    pub fn redeem(&mut self, redemption: f64) -> Result<(NaiveDate, f64)> {
+        if self.daily_infos.last().unwrap().holding_share < redemption {
+            return Err(Error::Insufficient);
+        }
+        if self.net_asset_value_history.len() < self.daily_infos.len() {
+            Err(Error::Insufficient)
+        } else {
+            let &(date, net_asset_value) = self
+                .net_asset_value_history
+                .get(self.daily_infos.len() - 1)
+                .unwrap();
+            let fee = self.rule.fee(Order::Redemption {
+                date,
+                net_asset_value,
+                redemption,
+            });
+            let money = net_asset_value * redemption - fee;
+            self.transactions.push(Transaction::Redemption {
+                date,
+                net_asset_value,
+                redemption,
+                money,
+                fee,
+            });
+            let mut info = self.daily_infos.last().unwrap().clone();
+            info.transaction_id = self.transactions.len();
+            info.holding_share -= redemption;
+            info.cumulative_redemption += money;
+            self.daily_infos.push(info);
+            if self.net_asset_value_history.len() == self.daily_infos.len() - 1 {
+                Err(Error::Overflow)
+            } else {
+                Ok(self.net_asset_value_history[self.daily_infos.len() - 1])
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_zero_fee() {
+        let (mut repo, date_nav) = Repository::start(
+            Box::new(|_| 0.0),
+            NaiveDate::from_ymd(2021, 1, 1)
+                .iter_days()
+                .enumerate()
+                .take(5)
+                .map(|(i, date)| (date, if i & 1 == 0 { 1.0 } else { 1.05 }))
+                .collect(),
+        )
+        .unwrap();
+        assert_eq!(repo.len(), 5);
+        assert_eq!(date_nav, (NaiveDate::from_ymd(2021, 1, 1), 1.0));
+        assert_eq!(
+            repo.invest(100.0),
+            Ok((NaiveDate::from_ymd(2021, 1, 2), 1.05))
+        );
+        assert_eq!(repo.redeem(101.0), Err(Error::Insufficient));
+        assert_eq!(repo.daily_infos().last().unwrap().holding_share(), 100.0);
+        assert_eq!(
+            repo.redeem(50.0),
+            Ok((NaiveDate::from_ymd(2021, 1, 3), 1.0))
+        );
+        assert_eq!(repo.pass(), Ok((NaiveDate::from_ymd(2021, 1, 4), 1.05)));
+        assert_eq!(
+            repo.invest(50.0),
+            Ok((NaiveDate::from_ymd(2021, 1, 5), 1.0))
+        );
+        assert_eq!(repo.invest(100.0), Err(Error::Overflow));
+        assert_eq!(
+            repo.transactions(),
+            &[
+                Transaction::Investment {
+                    date: NaiveDate::from_ymd(2021, 1, 1),
+                    net_asset_value: 1.0,
+                    investment: 100.0,
+                    share: 100.0,
+                    fee: 0.0
+                },
+                Transaction::Redemption {
+                    date: NaiveDate::from_ymd(2021, 1, 2),
+                    net_asset_value: 1.05,
+                    redemption: 50.0,
+                    money: 52.5,
+                    fee: 0.0
+                },
+                Transaction::Investment {
+                    date: NaiveDate::from_ymd(2021, 1, 4),
+                    net_asset_value: 1.05,
+                    investment: 50.0,
+                    share: 50.0 / 1.05,
+                    fee: 0.0
+                },
+                Transaction::Investment {
+                    date: NaiveDate::from_ymd(2021, 1, 5),
+                    net_asset_value: 1.0,
+                    investment: 100.0,
+                    share: 100.0,
+                    fee: 0.0
+                }
+            ]
+        );
+        assert_eq!(
+            repo.daily_infos(),
+            &[
+                DailyInfo {
+                    transaction_id: 1,
+                    holding_price: 1.0,
+                    holding_share: 100.0,
+                    cumulative_investment: 100.0,
+                    cumulative_redemption: 0.0
+                },
+                DailyInfo {
+                    transaction_id: 2,
+                    holding_price: 1.0,
+                    holding_share: 50.0,
+                    cumulative_investment: 100.0,
+                    cumulative_redemption: 52.5
+                },
+                DailyInfo {
+                    transaction_id: 0,
+                    holding_price: 1.0,
+                    holding_share: 50.0,
+                    cumulative_investment: 100.0,
+                    cumulative_redemption: 52.5
+                },
+                DailyInfo {
+                    transaction_id: 3,
+                    holding_price: 100.0 / (50.0 + 50.0 / 1.05),
+                    holding_share: 50.0 + 50.0 / 1.05,
+                    cumulative_investment: 150.0,
+                    cumulative_redemption: 52.5
+                },
+                DailyInfo {
+                    transaction_id: 4,
+                    holding_price: 200.0 / (150.0 + 50.0 / 1.05),
+                    holding_share: 150.0 + 50.0 / 1.05,
+                    cumulative_investment: 250.0,
+                    cumulative_redemption: 52.5
+                }
+            ]
+        );
     }
 }
