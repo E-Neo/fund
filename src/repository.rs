@@ -245,21 +245,32 @@ mod tests {
         assert_eq!(repo.len(), 5);
         assert_eq!(date_nav, (NaiveDate::from_ymd(2021, 1, 1), 1.0));
         assert_eq!(
-            repo.invest(100.0),
-            Ok((NaiveDate::from_ymd(2021, 1, 2), 1.05))
+            repo.invest(100.0).unwrap(),
+            (NaiveDate::from_ymd(2021, 1, 2), 1.05)
         );
-        assert_eq!(repo.redeem(101.0), Err(Error::Insufficient));
+        assert!(if let Err(Error::Insufficient) = repo.redeem(101.0) {
+            true
+        } else {
+            false
+        });
         assert_eq!(repo.daily_infos().last().unwrap().holding_share(), 100.0);
         assert_eq!(
-            repo.redeem(50.0),
-            Ok((NaiveDate::from_ymd(2021, 1, 3), 1.0))
+            repo.redeem(50.0).unwrap(),
+            (NaiveDate::from_ymd(2021, 1, 3), 1.0)
         );
-        assert_eq!(repo.pass(), Ok((NaiveDate::from_ymd(2021, 1, 4), 1.05)));
         assert_eq!(
-            repo.invest(50.0),
-            Ok((NaiveDate::from_ymd(2021, 1, 5), 1.0))
+            repo.pass().unwrap(),
+            (NaiveDate::from_ymd(2021, 1, 4), 1.05)
         );
-        assert_eq!(repo.invest(100.0), Err(Error::Overflow));
+        assert_eq!(
+            repo.invest(50.0).unwrap(),
+            (NaiveDate::from_ymd(2021, 1, 5), 1.0)
+        );
+        assert!(if let Err(Error::Overflow) = repo.invest(100.0) {
+            true
+        } else {
+            false
+        });
         assert_eq!(
             repo.transactions(),
             &[

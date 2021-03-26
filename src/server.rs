@@ -17,7 +17,7 @@ impl Server {
         rule: Box<dyn Rule>,
         net_asset_value_history: Vec<(NaiveDate, f64)>,
         port: u16,
-    ) -> std::io::Result<()> {
+    ) -> Result<()> {
         let listener = TcpListener::bind(("127.0.0.1", port))?;
         let (mut repository, (date, nav)) =
             Repository::start(rule, net_asset_value_history).unwrap();
@@ -40,7 +40,7 @@ impl Server {
                         Err(err) => {
                             writeln!(&mut writer, "-{}", err)?;
                             writer.flush()?;
-                            if err == Error::Overflow {
+                            if let Error::Overflow = err {
                                 break;
                             }
                         }

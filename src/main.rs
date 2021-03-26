@@ -1,7 +1,7 @@
 use chrono::NaiveDate;
-use fund::server::Server;
+use fund::{error::Result, server::Server};
 
-fn main() -> std::io::Result<()> {
+fn main() -> Result<()> {
     Server::run(
         Box::new(|_| 0.0),
         NaiveDate::from_ymd(2021, 1, 1)
