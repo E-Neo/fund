@@ -100,26 +100,23 @@ pub struct Repository {
 }
 
 impl Repository {
-    pub fn start(
+    pub fn new(
         rule: Box<dyn Rule>,
         net_asset_value_history: Vec<(NaiveDate, f64)>,
-    ) -> Result<(Self, (NaiveDate, f64))> {
-        if let Some(&date_nav) = net_asset_value_history.first() {
-            Ok((
-                Repository {
-                    rule,
-                    net_asset_value_history,
-                    transactions: vec![],
-                    daily_infos: vec![DailyInfo {
-                        transaction_id: 0,
-                        holding_price: 0.0,
-                        holding_share: 0.0,
-                        cumulative_investment: 0.0,
-                        cumulative_redemption: 0.0,
-                    }],
-                },
-                date_nav,
-            ))
+    ) -> Result<Self> {
+        if net_asset_value_history.len() >= 1 {
+            Ok(Repository {
+                rule,
+                net_asset_value_history,
+                transactions: vec![],
+                daily_infos: vec![DailyInfo {
+                    transaction_id: 0,
+                    holding_price: 0.0,
+                    holding_share: 0.0,
+                    cumulative_investment: 0.0,
+                    cumulative_redemption: 0.0,
+                }],
+            })
         } else {
             Err(Error::Insufficient)
         }
@@ -137,24 +134,27 @@ impl Repository {
         &self.transactions
     }
 
-    pub fn pass(&mut self) -> Result<(NaiveDate, f64)> {
-        if self.net_asset_value_history.len() < self.daily_infos.len() {
-            Err(Error::Insufficient)
+    pub fn check(&self) -> Result<(NaiveDate, f64)> {
+        self.net_asset_value_history
+            .get(self.daily_infos().len())
+            .map(|&x| x)
+            .ok_or(Error::Overflow)
+    }
+
+    pub fn pass(&mut self) -> Result<()> {
+        if self.len() == self.daily_infos().len() {
+            Err(Error::Overflow)
         } else {
             let mut info = self.daily_infos.last().unwrap().clone();
             info.transaction_id = 0;
             self.daily_infos.push(info);
-            if self.net_asset_value_history.len() == self.daily_infos.len() - 1 {
-                Err(Error::Overflow)
-            } else {
-                Ok(self.net_asset_value_history[self.daily_infos.len() - 1])
-            }
+            Ok(())
         }
     }
 
-    pub fn invest(&mut self, investment: f64) -> Result<(NaiveDate, f64)> {
-        if self.net_asset_value_history.len() < self.daily_infos.len() {
-            Err(Error::Insufficient)
+    pub fn invest(&mut self, investment: f64) -> Result<()> {
+        if self.len() == self.daily_infos().len() {
+            Err(Error::Overflow)
         } else {
             let &(date, net_asset_value) = self
                 .net_asset_value_history
@@ -180,19 +180,14 @@ impl Repository {
             info.holding_share += share;
             info.cumulative_investment += investment;
             self.daily_infos.push(info);
-            if self.net_asset_value_history.len() == self.daily_infos.len() - 1 {
-                Err(Error::Overflow)
-            } else {
-                Ok(self.net_asset_value_history[self.daily_infos.len() - 1])
-            }
+            Ok(())
         }
     }
 
-    pub fn redeem(&mut self, redemption: f64) -> Result<(NaiveDate, f64)> {
-        if self.daily_infos.last().unwrap().holding_share < redemption {
-            return Err(Error::Insufficient);
-        }
-        if self.net_asset_value_history.len() < self.daily_infos.len() {
+    pub fn redeem(&mut self, redemption: f64) -> Result<()> {
+        if self.len() == self.daily_infos().len() {
+            Err(Error::Overflow)
+        } else if self.daily_infos.last().unwrap().holding_share < redemption {
             Err(Error::Insufficient)
         } else {
             let &(date, net_asset_value) = self
@@ -217,11 +212,7 @@ impl Repository {
             info.holding_share -= redemption;
             info.cumulative_redemption += money;
             self.daily_infos.push(info);
-            if self.net_asset_value_history.len() == self.daily_infos.len() - 1 {
-                Err(Error::Overflow)
-            } else {
-                Ok(self.net_asset_value_history[self.daily_infos.len() - 1])
-            }
+            Ok(())
         }
     }
 }
@@ -232,7 +223,7 @@ mod tests {
 
     #[test]
     fn test_zero_fee() {
-        let (mut repo, date_nav) = Repository::start(
+        let mut repo = Repository::new(
             Box::new(|_| 0.0),
             NaiveDate::from_ymd(2021, 1, 1)
                 .iter_days()
@@ -243,11 +234,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(repo.len(), 5);
-        assert_eq!(date_nav, (NaiveDate::from_ymd(2021, 1, 1), 1.0));
         assert_eq!(
-            repo.invest(100.0).unwrap(),
-            (NaiveDate::from_ymd(2021, 1, 2), 1.05)
+            repo.check().unwrap(),
+            (NaiveDate::from_ymd(2021, 1, 1), 1.0)
         );
+        assert!(repo.invest(100.0).is_ok());
         assert!(if let Err(Error::Insufficient) = repo.redeem(101.0) {
             true
         } else {
@@ -255,18 +246,26 @@ mod tests {
         });
         assert_eq!(repo.daily_infos().last().unwrap().holding_share(), 100.0);
         assert_eq!(
-            repo.redeem(50.0).unwrap(),
+            repo.check().unwrap(),
+            (NaiveDate::from_ymd(2021, 1, 2), 1.05)
+        );
+        assert!(repo.redeem(50.0).is_ok());
+        assert_eq!(
+            repo.check().unwrap(),
             (NaiveDate::from_ymd(2021, 1, 3), 1.0)
         );
+        assert!(repo.pass().is_ok());
         assert_eq!(
-            repo.pass().unwrap(),
+            repo.check().unwrap(),
             (NaiveDate::from_ymd(2021, 1, 4), 1.05)
         );
+        assert!(repo.invest(50.0).is_ok());
         assert_eq!(
-            repo.invest(50.0).unwrap(),
+            repo.check().unwrap(),
             (NaiveDate::from_ymd(2021, 1, 5), 1.0)
         );
-        assert!(if let Err(Error::Overflow) = repo.invest(100.0) {
+        assert!(repo.invest(100.0).is_ok());
+        assert!(if let Err(Error::Overflow) = repo.check() {
             true
         } else {
             false

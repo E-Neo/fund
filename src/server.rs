@@ -1,5 +1,5 @@
 use crate::{
-    error::{Error, Result},
+    error::Result,
     repository::{Repository, Rule},
 };
 use chrono::NaiveDate;
@@ -19,11 +19,11 @@ impl Server {
         port: u16,
     ) -> Result<()> {
         let listener = TcpListener::bind(("127.0.0.1", port))?;
-        let (mut repository, (date, nav)) =
-            Repository::start(rule, net_asset_value_history).unwrap();
+        let mut repository = Repository::new(rule, net_asset_value_history)?;
         listener.accept().and_then(|(stream, _)| {
             let reader = BufReader::new(stream.try_clone()?);
             let mut writer = BufWriter::new(stream);
+            let (date, nav) = repository.check().unwrap();
             writeln!(&mut writer, "+{} {}", date, nav)?;
             writer.flush()?;
             for line in reader.lines() {
@@ -33,16 +33,20 @@ impl Server {
                     .or(redeem(&mut repository, line))
                 {
                     match res {
-                        Ok((date, nav)) => {
-                            writeln!(&mut writer, "+{} {}", date, nav)?;
-                            writer.flush()?;
-                        }
+                        Ok(()) => match repository.check() {
+                            Ok((date, nav)) => {
+                                writeln!(&mut writer, "+{} {}", date, nav)?;
+                                writer.flush()?;
+                            }
+                            Err(err) => {
+                                writeln!(&mut writer, "-{}", err)?;
+                                writer.flush()?;
+                                break;
+                            }
+                        },
                         Err(err) => {
                             writeln!(&mut writer, "-{}", err)?;
                             writer.flush()?;
-                            if let Error::Overflow = err {
-                                break;
-                            }
                         }
                     }
                 } else {
@@ -56,14 +60,14 @@ impl Server {
     }
 }
 
-fn pass(repository: &mut Repository, line: &str) -> Option<Result<(NaiveDate, f64)>> {
+fn pass(repository: &mut Repository, line: &str) -> Option<Result<()>> {
     lazy_static! {
         static ref RE: Regex = Regex::new(r"^p$").unwrap();
     }
     RE.captures(line).map(|_| repository.pass())
 }
 
-fn invest(repository: &mut Repository, line: &str) -> Option<Result<(NaiveDate, f64)>> {
+fn invest(repository: &mut Repository, line: &str) -> Option<Result<()>> {
     lazy_static! {
         static ref RE: Regex = Regex::new(r"^i(\S+)$").unwrap();
     }
@@ -77,7 +81,7 @@ fn invest(repository: &mut Repository, line: &str) -> Option<Result<(NaiveDate, 
     }
 }
 
-fn redeem(repository: &mut Repository, line: &str) -> Option<Result<(NaiveDate, f64)>> {
+fn redeem(repository: &mut Repository, line: &str) -> Option<Result<()>> {
     lazy_static! {
         static ref RE: Regex = Regex::new(r"^r(\S+)$").unwrap();
     }
