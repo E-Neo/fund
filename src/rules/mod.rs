@@ -1,3 +1,3 @@
-pub use fifo::FIFO;
+pub use fifo::Fifo;
 
 mod fifo;

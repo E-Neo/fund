@@ -8,4 +8,6 @@ pub enum Error {
     Overflow,
     #[from]
     IO(std::io::Error),
+    #[from]
+    GUI(iced::Error),
 }

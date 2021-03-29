@@ -126,6 +126,10 @@ impl Repository {
         self.net_asset_value_history.len()
     }
 
+    pub fn net_asset_value_history(&self) -> &[(NaiveDate, f64)] {
+        &self.net_asset_value_history
+    }
+
     pub fn daily_infos(&self) -> &[DailyInfo] {
         &self.daily_infos[1..]
     }

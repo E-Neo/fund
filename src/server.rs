@@ -17,46 +17,53 @@ impl Server {
         rule: Box<dyn Rule>,
         net_asset_value_history: Vec<(NaiveDate, f64)>,
         port: u16,
-    ) -> Result<()> {
+    ) -> Result<Repository> {
         let listener = TcpListener::bind(("127.0.0.1", port))?;
         let mut repository = Repository::new(rule, net_asset_value_history)?;
-        listener.accept().and_then(|(stream, _)| {
-            let reader = BufReader::new(stream.try_clone()?);
-            let mut writer = BufWriter::new(stream);
-            let (date, nav) = repository.check().unwrap();
-            writeln!(&mut writer, "+{} {}", date, nav)?;
-            writer.flush()?;
-            for line in reader.lines() {
-                let line = &line?;
-                if let Some(res) = pass(&mut repository, line)
-                    .or(invest(&mut repository, line))
-                    .or(redeem(&mut repository, line))
-                {
-                    match res {
-                        Ok(()) => match repository.check() {
-                            Ok((date, nav)) => {
-                                writeln!(&mut writer, "+{} {}", date, nav)?;
-                                writer.flush()?;
-                            }
+        listener
+            .accept()
+            .and_then(|(stream, _)| {
+                let reader = BufReader::new(stream.try_clone()?);
+                let mut writer = BufWriter::new(stream);
+                let (date, nav) = repository.check().unwrap();
+                writeln!(&mut writer, "+{} {}", date, nav)?;
+                writer.flush()?;
+                for line in reader.lines() {
+                    let line = &line?;
+                    if line == "e" {
+                        while repository.daily_infos().len() != repository.len() {
+                            repository.pass().unwrap();
+                        }
+                        break;
+                    } else if let Some(res) = pass(&mut repository, line)
+                        .or(invest(&mut repository, line))
+                        .or(redeem(&mut repository, line))
+                    {
+                        match res {
+                            Ok(()) => match repository.check() {
+                                Ok((date, nav)) => {
+                                    writeln!(&mut writer, "+{} {}", date, nav)?;
+                                    writer.flush()?;
+                                }
+                                Err(err) => {
+                                    writeln!(&mut writer, "-{}", err)?;
+                                    writer.flush()?;
+                                    break;
+                                }
+                            },
                             Err(err) => {
                                 writeln!(&mut writer, "-{}", err)?;
                                 writer.flush()?;
-                                break;
                             }
-                        },
-                        Err(err) => {
-                            writeln!(&mut writer, "-{}", err)?;
-                            writer.flush()?;
                         }
+                    } else {
+                        writeln!(&mut writer, "-Invalid")?;
+                        writer.flush()?;
                     }
-                } else {
-                    writeln!(&mut writer, "-Invalid")?;
-                    writer.flush()?;
                 }
-            }
-            Ok(())
-        })?;
-        Ok(())
+                Ok(repository)
+            })
+            .map_err(|err| err.into())
     }
 }
 

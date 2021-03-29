@@ -2,13 +2,13 @@ use crate::repository::{Order, Rule};
 use chrono::NaiveDate;
 use std::collections::VecDeque;
 
-pub struct FIFO {
+pub struct Fifo {
     queue: VecDeque<(NaiveDate, f64)>, // (invest_date, share)
     investment_rates: Vec<(f64, f64)>,
     redemption_rates: Vec<(usize, f64)>,
 }
 
-impl FIFO {
+impl Fifo {
     pub fn new(investment_rates: Vec<(f64, f64)>, redemption_rates: Vec<(usize, f64)>) -> Self {
         Self {
             queue: VecDeque::new(),
@@ -18,7 +18,7 @@ impl FIFO {
     }
 }
 
-impl Rule for FIFO {
+impl Rule for Fifo {
     fn fee(&mut self, order: Order) -> f64 {
         match order {
             Order::Investment {
@@ -90,7 +90,7 @@ mod tests {
 
     #[test]
     fn test_7_30() {
-        let mut rule = FIFO::new(vec![], vec![(7, 0.015), (30, 0.005)]);
+        let mut rule = Fifo::new(vec![], vec![(7, 0.015), (30, 0.005)]);
         assert_eq!(
             rule.fee(Order::Investment {
                 date: NaiveDate::from_ymd(2021, 1, 1),
