@@ -4,6 +4,9 @@ version = "0.1.0"
 authors = ["E-Neo <e-neo@qq.com>"]
 edition = "2018"
 
+[build-dependencies]
+font-kit = "0.8"
+
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 derive_more = "0.99"

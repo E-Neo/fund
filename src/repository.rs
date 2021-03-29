@@ -85,10 +85,6 @@ impl DailyInfo {
     pub fn cumulative_redemption(&self) -> f64 {
         self.cumulative_redemption
     }
-
-    pub fn cumulative_income(&self) -> f64 {
-        self.cumulative_redemption - self.cumulative_investment
-    }
 }
 
 #[derive(Debug)]
