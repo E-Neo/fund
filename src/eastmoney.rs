@@ -1,10 +1,29 @@
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    fees,
+};
 use chrono::{FixedOffset, NaiveDate, TimeZone};
 use serde::Deserialize;
 use std::collections::HashMap;
 
 const EASTMONEY_URL: &str = "https://fund.eastmoney.com/pingzhongdata/{code}.js";
+const NAV_RANGE_URL: &str = "https://api.fund.eastmoney.com/f10/lsjz?fundCode={code}&startDate={start}&endDate={end}&pageIndex={page}&pageSize=20";
+const FEE_URL: &str = "http://fundf10.eastmoney.com/jjfl_{code}.html";
+const BASIC_URL: &str = "https://fundmobapi.eastmoney.com/FundMNewApi/FundMNBasicInformation?FCODE={code}&deviceid=abc&plat=Iphone&product=EFund&version=6.2.8";
 const BEIJING_OFFSET: i32 = 8 * 3600;
+
+fn client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .default_headers(
+            std::iter::once((
+                reqwest::header::REFERER,
+                reqwest::header::HeaderValue::from_static("http://fundf10.eastmoney.com/"),
+            ))
+            .collect(),
+        )
+        .build()
+        .expect("reqwest client")
+}
 
 #[derive(Debug, Clone)]
 pub struct Nav {
@@ -35,6 +54,44 @@ struct AccWorthPoint {
     y: f64,
 }
 
+#[derive(Debug, Deserialize)]
+struct LsjzResponse {
+    #[serde(rename = "ErrCode")]
+    err_code: i64,
+    #[serde(rename = "Data")]
+    data: Option<LsjzData>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LsjzData {
+    #[serde(rename = "LSJZList")]
+    list: Vec<LsjzPoint>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LsjzPoint {
+    #[serde(rename = "FSRQ")]
+    date: String,
+    #[serde(rename = "DWJZ")]
+    unit_nav: String,
+    #[serde(rename = "LJJZ")]
+    accum_nav: String,
+    #[serde(rename = "JZZZL")]
+    daily_return: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct BasicResponse {
+    #[serde(rename = "Datas")]
+    datas: BasicData,
+}
+
+#[derive(Debug, Deserialize)]
+struct BasicData {
+    #[serde(rename = "SHORTNAME")]
+    short_name: String,
+}
+
 fn is_valid_code(code: &str) -> bool {
     code.len() == 6 && code.chars().all(|c| c.is_ascii_digit())
 }
@@ -44,8 +101,67 @@ pub async fn fetch_fund(code: &str) -> Result<Fund> {
         return Err(Error::InvalidCode(code.to_string()));
     }
     let url = EASTMONEY_URL.replace("{code}", code);
-    let body = reqwest::get(&url).await?.text().await?;
+    let body = client().get(&url).send().await?.text().await?;
     parse_js(&body, code)
+}
+
+pub async fn fetch_fund_name(code: &str) -> Result<String> {
+    let url = BASIC_URL.replace("{code}", code);
+    let resp: BasicResponse = client().get(&url).send().await?.json().await?;
+    Ok(resp.datas.short_name)
+}
+
+pub async fn fetch_nav_range(code: &str, start: NaiveDate, end: NaiveDate) -> Result<Vec<Nav>> {
+    if !is_valid_code(code) {
+        return Err(Error::InvalidCode(code.to_string()));
+    }
+    let mut navs = Vec::new();
+    let mut page = 1;
+    loop {
+        let url = NAV_RANGE_URL
+            .replace("{code}", code)
+            .replace("{start}", &start.format("%Y-%m-%d").to_string())
+            .replace("{end}", &end.format("%Y-%m-%d").to_string())
+            .replace("{page}", &page.to_string());
+        let resp: LsjzResponse = client().get(&url).send().await?.json().await?;
+        if resp.err_code != 0 {
+            return Err(Error::Parse(format!("lsjz ErrCode {}", resp.err_code)));
+        }
+        let list = resp.data.map(|d| d.list).unwrap_or_default();
+        if list.is_empty() {
+            break;
+        }
+        for point in &list {
+            let unit_nav: f64 = point
+                .unit_nav
+                .parse()
+                .map_err(|_| Error::Parse(format!("bad unit_nav {:?}", point.unit_nav)))?;
+            let date = NaiveDate::parse_from_str(&point.date, "%Y-%m-%d")?;
+            let accum_nav = point.accum_nav.parse().unwrap_or(unit_nav);
+            let daily_return = point.daily_return.parse().ok();
+            navs.push(Nav {
+                date,
+                unit_nav,
+                accum_nav,
+                daily_return,
+            });
+        }
+        if list.len() < 20 {
+            break;
+        }
+        page += 1;
+    }
+    navs.sort_by_key(|nav| nav.date);
+    Ok(navs)
+}
+
+pub async fn fetch_fees(code: &str) -> Result<fees::FeeRule> {
+    if !is_valid_code(code) {
+        return Err(Error::InvalidCode(code.to_string()));
+    }
+    let url = FEE_URL.replace("{code}", code);
+    let body = client().get(&url).send().await?.text().await?;
+    fees::parse_fees(&body)
 }
 
 fn parse_js(js: &str, code: &str) -> Result<Fund> {

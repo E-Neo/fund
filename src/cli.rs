@@ -27,6 +27,9 @@ pub enum Command {
         /// Path to the SQLite database file.
         #[arg(long)]
         db: String,
+        /// Ignore stored fee rules and backtest with zero fees.
+        #[arg(long)]
+        no_rules: bool,
         /// Start date (inclusive), ISO yyyy-mm-dd.
         #[arg(long)]
         from: Option<String>,
@@ -42,6 +45,14 @@ pub enum Command {
         /// Days between buys for the dca strategy.
         #[arg(long, default_value_t = 7)]
         dca_interval: u64,
+    },
+    /// Fetch daily NAV rows newer than the last stored date (incremental).
+    Update {
+        /// Fund code, e.g. 110022.
+        code: String,
+        /// Path to the SQLite database file.
+        #[arg(long)]
+        db: String,
     },
     /// List funds cached in the database.
     List {
