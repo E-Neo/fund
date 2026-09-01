@@ -1,17 +1,72 @@
 use chrono::NaiveDate;
-use fund::{error::Result, gui::Gui, server::Server};
-use iced::{Application, Settings};
+use clap::Parser;
+use fund::{
+    cli::{Cli, Command},
+    db, eastmoney,
+    error::{Error, Result},
+    report, rules, sim,
+};
 
-fn main() -> Result<()> {
-    Gui::run(Settings::with_flags(Server::run(
-        Box::new(|_| 0.0),
-        NaiveDate::from_ymd(2021, 1, 1)
-            .iter_days()
-            .enumerate()
-            .take(5)
-            .map(|(i, date)| (date, if i & 1 == 0 { 1.0 } else { 1.05 }))
-            .collect(),
-        8000,
-    )?))
-    .map_err(|err| err.into())
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cli = Cli::parse();
+    match cli.command {
+        Command::Fetch { code, db } => {
+            let pool = db::open(&db).await?;
+            let fund = eastmoney::fetch_fund(&code).await?;
+            db::upsert_fund(&pool, &fund).await?;
+            println!("fetched {} ({} rows)", fund.name, fund.navs.len());
+        }
+        Command::Backtest {
+            code,
+            strategy,
+            db,
+            from,
+            to,
+            initial,
+            dca_amount,
+            dca_interval,
+        } => {
+            let pool = db::open(&db).await?;
+            let navs = db::load_navs(&pool, &code).await?;
+            let from = from
+                .as_deref()
+                .map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d"))
+                .transpose()?;
+            let to = to
+                .as_deref()
+                .map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d"))
+                .transpose()?;
+            let navs: Vec<_> = navs
+                .into_iter()
+                .filter(|nav| {
+                    from.is_none_or(|f| nav.date >= f) && to.is_none_or(|t| nav.date <= t)
+                })
+                .collect();
+            if navs.is_empty() {
+                return Err(Error::NoData(code));
+            }
+            let start = navs.first().expect("non-empty").date;
+            let end = navs.last().expect("non-empty").date;
+            let days = navs.len();
+
+            let mut fee_rule = rules::Fifo::new(vec![], vec![(7, 0.015), (30, 0.005)]);
+            let mut strategy = sim::strategy::create(&strategy, initial, dca_amount, dca_interval)?;
+            let result = sim::engine::simulate(&navs, &mut fee_rule, strategy.as_mut())?;
+            let report = report::build(start, end, days, &result);
+            println!("{}", report);
+        }
+        Command::List { db } => {
+            let pool = db::open(&db).await?;
+            for (code, name) in db::list_funds(&pool).await? {
+                println!("{code}  {name}");
+            }
+        }
+        Command::Strategies => {
+            for name in sim::strategy::names() {
+                println!("{name}");
+            }
+        }
+    }
+    Ok(())
 }
