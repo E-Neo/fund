@@ -180,9 +180,27 @@ mod tests {
 
     #[test]
     fn test_buy_hold_zero_fee() {
+        struct BuyHold {
+            invested: bool,
+        }
+        impl Strategy for BuyHold {
+            fn name(&self) -> &str {
+                "buy_hold"
+            }
+            fn on_event(&mut self, event: &Event, _ctx: &mut SimContext) -> Vec<Order> {
+                if !self.invested {
+                    if let Event::NavUpdate { .. } = event {
+                        self.invested = true;
+                        return vec![Order::Invest { amount: 100.0 }];
+                    }
+                }
+                Vec::new()
+            }
+        }
+
         let mut fee_rule = Fifo::new(vec![], vec![]);
-        let mut strategy = crate::sim::strategy::create("buy_hold", 100.0, 0.0, 0).unwrap();
-        let result = simulate(&navs(), &mut fee_rule, strategy.as_mut()).unwrap();
+        let mut strategy = BuyHold { invested: false };
+        let result = simulate(&navs(), &mut fee_rule, &mut strategy).unwrap();
         assert_eq!(result.transactions.len(), 1);
         // Order placed on day 1's NavUpdate executes at day 2's nav (1.05).
         assert_eq!(result.final_state.holding_share, 100.0 / 1.05);

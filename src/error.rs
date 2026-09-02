@@ -22,4 +22,12 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("invalid date: {0}")]
     InvalidDate(#[from] chrono::ParseError),
+    #[error("wasm strategy error: {0}")]
+    Wasm(String),
+}
+
+impl From<wasmtime::Error> for Error {
+    fn from(err: wasmtime::Error) -> Self {
+        Error::Wasm(err.to_string())
+    }
 }

@@ -1,4 +1,23 @@
 use clap::{Parser, Subcommand};
+use std::{path::PathBuf, str::FromStr};
+
+#[derive(Debug, Clone)]
+pub enum StrategyArg {
+    Bundled(String),
+    File(PathBuf),
+}
+
+impl FromStr for StrategyArg {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.ends_with(".toml") {
+            Ok(StrategyArg::File(PathBuf::from(s)))
+        } else {
+            Ok(StrategyArg::Bundled(s.to_string()))
+        }
+    }
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "fund", about = "Event-driven fund trading backtester")]
@@ -21,9 +40,9 @@ pub enum Command {
     Backtest {
         /// Fund code, e.g. 110022.
         code: String,
-        /// Strategy name.
-        #[arg(long, default_value = "buy_hold")]
-        strategy: String,
+        /// Strategy name or path to a strategy.toml file.
+        #[arg(long, value_parser = clap::value_parser!(StrategyArg), default_value = "buy_hold")]
+        strategy: StrategyArg,
         /// Path to the SQLite database file.
         #[arg(long)]
         db: String,

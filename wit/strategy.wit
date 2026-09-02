@@ -1,0 +1,49 @@
+package fund:strategy;
+
+interface strategy {
+    record nav-update {
+        date: string,
+        unit-nav: f64,
+        accum-nav: f64,
+    }
+
+    record invest-executed {
+        amount: f64,
+        shares: f64,
+        fee: f64,
+    }
+
+    record redeem-executed {
+        shares: f64,
+        money: f64,
+        fee: f64,
+    }
+
+    variant transaction-kind {
+        invest(invest-executed),
+        redeem(redeem-executed),
+    }
+
+    record order-executed {
+        date: string,
+        unit-nav: f64,
+        kind: transaction-kind,
+    }
+
+    variant event {
+        nav-update(nav-update),
+        order-executed(order-executed),
+    }
+
+    variant order {
+        invest(f64),
+        redeem(f64),
+    }
+
+    init: func(config: string);
+    on-event: func(event: event) -> list<order>;
+}
+
+world fund-strategy {
+    export strategy;
+}

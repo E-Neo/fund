@@ -94,7 +94,7 @@ async fn main() -> Result<()> {
                 redeem: vec![],
             });
             let mut fee_rule = rules::Fifo::new(fee_rule.subscribe, fee_rule.redeem);
-            let mut strategy = sim::strategy::create(&strategy, initial, dca_amount, dca_interval)?;
+            let mut strategy = sim::strategy::load(&strategy, initial, dca_amount, dca_interval)?;
             let result = sim::engine::simulate(&navs, &mut fee_rule, strategy.as_mut())?;
             let report = report::build(start, end, days, &result);
             println!("{}", report);
