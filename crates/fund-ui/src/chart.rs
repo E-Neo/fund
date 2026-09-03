@@ -1,4 +1,4 @@
-use crate::web::types::CurvePoint;
+use fund_types::CurvePoint;
 use leptos::prelude::*;
 use std::sync::Arc;
 

@@ -7,8 +7,15 @@ use exports::fund::strategy::strategy::{Event, Order};
 use std::sync::Mutex;
 
 enum StrategyKind {
-    BuyHold { amount: f64, invested: bool },
-    Dca { amount: f64, interval: u64, day: u64 },
+    BuyHold {
+        amount: f64,
+        invested: bool,
+    },
+    Dca {
+        amount: f64,
+        interval: u64,
+        day: u64,
+    },
 }
 
 #[derive(Default)]
@@ -65,11 +72,9 @@ impl exports::fund::strategy::strategy::Guest for FundStrategies {
         let mut state = STATE.lock().unwrap();
         match &mut state.kind {
             Some(StrategyKind::BuyHold { amount, invested }) => {
-                if !*invested {
-                    if let Event::NavUpdate(_) = event {
-                        *invested = true;
-                        return vec![Order::Invest(*amount)];
-                    }
+                if !*invested && let Event::NavUpdate(_) = event {
+                    *invested = true;
+                    return vec![Order::Invest(*amount)];
                 }
                 Vec::new()
             }

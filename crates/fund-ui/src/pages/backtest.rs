@@ -1,8 +1,5 @@
-use crate::web::{
-    chart::Chart,
-    server::{list_strategies, run_backtest},
-    types::{BacktestInput, BacktestReport},
-};
+use crate::{api, chart::Chart};
+use fund_types::{BacktestInput, BacktestReport, StrategyInfo};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -15,7 +12,18 @@ pub fn BacktestPage() -> impl IntoView {
     let dca_interval = RwSignal::new(7u64);
     let no_rules = RwSignal::new(false);
 
-    let strategies = Resource::new(|| (), |_| list_strategies());
+    let strategies = RwSignal::new(None::<Result<Vec<StrategyInfo>, String>>);
+
+    // Client-only fetch of the strategy list (see FundsPage for the SSR note).
+    Effect::new(move |_| {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let strategies = strategies;
+            spawn_local(async move {
+                strategies.set(Some(api::list_strategies().await));
+            });
+        }
+    });
 
     let report = RwSignal::new(None::<BacktestReport>);
     let running = RwSignal::new(false);
@@ -32,9 +40,9 @@ pub fn BacktestPage() -> impl IntoView {
             no_rules: no_rules.get_untracked(),
         };
         running.set(true);
-        let result = run_backtest(input);
+        let future = api::run_backtest(input);
         spawn_local(async move {
-            match result.await {
+            match future.await {
                 Ok(r) => report.set(Some(r)),
                 Err(e) => {
                     leptos::logging::error!("backtest failed: {e}");
@@ -51,18 +59,15 @@ pub fn BacktestPage() -> impl IntoView {
             <input type="text" prop:value=code on:input=move |e| code.set(event_target_value(&e)) />
             <label>"Strategy"</label>
             <select prop:value=strategy on:change=move |e| strategy.set(event_target_value(&e))>
-                <Suspense fallback=move || view! { <option>"Loading..."</option> }>
-                    {move || {
-                        strategies.get().map(|result| match result {
-                            Ok(list) => list
-                                .into_iter()
-                                .map(|s| view! { <option value=s.name.clone()>{s.name.clone()}</option> })
-                                .collect_view()
-                                .into_any(),
-                            Err(_) => view! { <option>"none"</option> }.into_any(),
-                        })
-                    }}
-                </Suspense>
+                {move || match strategies.get() {
+                    Some(Ok(list)) => list
+                        .iter()
+                        .map(|s| view! { <option value=s.name.clone()>{s.name.clone()}</option> })
+                        .collect_view()
+                        .into_any(),
+                    Some(Err(_)) => view! { <option>"none"</option> }.into_any(),
+                    None => view! { <option>"Loading..."</option> }.into_any(),
+                }}
             </select>
             <label>"Initial amount"</label>
             <input type="number" prop:value=initial on:input=move |e| {
@@ -87,7 +92,7 @@ pub fn BacktestPage() -> impl IntoView {
             </button>
         </form>
 
-        <Suspense fallback=|| ()>
+        <div>
             {move || {
                 report.get().map(|report| view! {
                     <section>
@@ -105,6 +110,6 @@ pub fn BacktestPage() -> impl IntoView {
                     </section>
                 })
             }}
-        </Suspense>
+        </div>
     }
 }

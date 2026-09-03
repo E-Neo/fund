@@ -1,5 +1,5 @@
 use chrono::NaiveDate;
-use fund::{
+use fund_api::{
     eastmoney::Nav,
     error::Result,
     rules::Fifo,

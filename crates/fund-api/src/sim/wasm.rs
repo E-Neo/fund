@@ -7,14 +7,14 @@ use crate::{
 };
 use std::path::Path;
 use wasmtime::{
-    component::{Component, Linker, ResourceTable},
     Engine, Store,
+    component::{Component, Linker, ResourceTable},
 };
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 wasmtime::component::bindgen!({
     world: "fund-strategy",
-    path: "wit/strategy.wit",
+    path: "../../wit/strategy.wit",
 });
 
 pub struct HostWasi {

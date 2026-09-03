@@ -6,8 +6,8 @@ use crate::{
 };
 use chrono::NaiveDate;
 use sqlx::{
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
     SqlitePool,
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
 
 pub async fn open(path: &str) -> Result<SqlitePool> {
