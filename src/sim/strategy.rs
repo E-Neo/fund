@@ -1,5 +1,4 @@
 use crate::{
-    cli::StrategyArg,
     error::{Error, Result},
     sim::{
         event::{Event, Order, Transaction},
@@ -8,7 +7,13 @@ use crate::{
     },
 };
 use chrono::NaiveDate;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone)]
+pub enum StrategyArg {
+    Bundled(String),
+    File(PathBuf),
+}
 
 pub struct SimContext<'a> {
     pub date: NaiveDate,

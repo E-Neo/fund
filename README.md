@@ -1,39 +1,44 @@
 # fund
 
-An event-driven backtesting CLI for mutual fund trading strategies.
+A web-based backtesting application for mutual fund trading strategies,
+written in Rust with Leptos (SSR + client-side hydration).
 
 ## Features
 
-- Fetch real daily NAV history from Eastmoney and store it in SQLite.
-- Backtest trading strategies against historical NAV data.
+- Web UI to fetch real daily NAV history from Eastmoney and store it in SQLite.
+- Backtest trading strategies against historical NAV data from the browser.
 - Event-driven simulation engine with T+1 (next-day NAV) order execution.
 - Pluggable fee rules (e.g. FIFO redemption fee by holding period).
 - **WASM-based strategies**: every strategy, including the bundled `buy_hold`
   and `dca`, is a WebAssembly component (WIT interface) that is built into the
   binary. Third-party strategies can be loaded from a `strategy.toml`.
+- Interactive equity-curve chart (zoom / pan / hover) rendered as SVG.
 
-## Commands
-
-```
-fund fetch <CODE> --db <PATH>          Fetch daily NAV history into SQLite
-fund backtest <CODE> --strategy <NAME|TOML> --db <PATH> [--from DATE] [--to DATE]
-                 [--initial AMOUNT] [--dca-amount AMOUNT] [--dca-interval DAYS]
-fund update <CODE> --db <PATH>         Fetch NAV rows newer than the last stored date
-fund list --db <PATH>                  List funds cached in the database
-fund strategies                        List available strategies
-```
-
-## Example
+## Running
 
 ```sh
-cargo run -- fetch 110022 --db fund.db
-cargo run -- backtest 110022 --strategy dca --db fund.db --dca-amount 500 --dca-interval 30
+cargo run                      # starts the server
+# FUND_DB=/path/to/fund.db     # database path (default: ./fund.db)
+# FUND_ADDR=127.0.0.1:8080     # bind address (default: 127.0.0.1:8080)
 ```
+
+Open http://127.0.0.1:8080 in a browser.
+
+The server renders the app server-side (SSR); the client-side UI is compiled to
+WebAssembly (`wasm32-unknown-unknown`) by `build.rs` and embedded into the
+binary, so no extra tooling is needed to run.
+
+## Pages
+
+- **Funds**: list funds already in the database, add a fund by code (e.g.
+  `110022`) with the *Fetch* button, or refresh one with *Update*.
+- **Backtest**: pick a fund and strategy, configure parameters, run the
+  backtest, and view the report summary plus an interactive equity-curve chart.
 
 ## Strategies
 
-- `buy_hold`: invest `--initial` once and hold.
-- `dca`: invest `--dca-amount` every `--dca-interval` trading days.
+- `buy_hold`: invest `--initial`-equivalent amount once and hold.
+- `dca`: invest a fixed amount on a regular schedule.
 
 Strategies are compiled to WebAssembly components and embedded into the
 binary. Bundled strategy sources live in `crates/fund-strategies/`, where the
@@ -66,5 +71,7 @@ and can be extended by implementing the `Rule` trait.
 
 The bundled WASM strategies are built automatically by `build.rs`, which runs
 `cargo build --target wasm32-wasip2` for each guest and embeds the resulting
-components into the binary. Building requires the `wasm32-wasip2` Rust target
-(`rustup target add wasm32-wasip2`).
+components into the binary. The client-side UI is built for
+`wasm32-unknown-unknown` and processed with `wasm-bindgen`. Building requires
+the `wasm32-wasip2` and `wasm32-unknown-unknown` Rust targets
+(`rustup target add wasm32-wasip2 wasm32-unknown-unknown`) and `wasm-bindgen`.

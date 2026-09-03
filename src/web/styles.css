@@ -1,0 +1,86 @@
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: system-ui, -apple-system, sans-serif;
+    background: #f7f7f9;
+    color: #222;
+}
+
+.container {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 1rem 1.5rem;
+}
+
+nav {
+    margin: 1rem 0;
+    display: flex;
+    gap: 1rem;
+}
+
+nav a {
+    color: #2b6cb0;
+    text-decoration: none;
+    font-weight: 600;
+}
+
+nav a:hover {
+    text-decoration: underline;
+}
+
+h1 {
+    font-size: 1.6rem;
+}
+
+table {
+    border-collapse: collapse;
+    width: 100%;
+    background: #fff;
+}
+
+th,
+td {
+    border: 1px solid #ddd;
+    padding: 0.4rem 0.6rem;
+    text-align: left;
+}
+
+label {
+    display: block;
+    margin: 0.5rem 0 0.2rem;
+    font-weight: 600;
+}
+
+input,
+select {
+    width: 100%;
+    max-width: 320px;
+    padding: 0.3rem 0.4rem;
+}
+
+button {
+    margin-top: 1rem;
+    padding: 0.4rem 1rem;
+    cursor: pointer;
+}
+
+.axis {
+    font-size: 11px;
+    fill: #666;
+}
+
+.tooltip {
+    font-size: 12px;
+    fill: #fff;
+    stroke: #333;
+    paint-order: stroke;
+    stroke-width: 3px;
+}
+
+.hint {
+    color: #666;
+    font-size: 0.8rem;
+}
