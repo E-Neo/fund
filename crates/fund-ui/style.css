@@ -84,3 +84,18 @@ button {
     color: #666;
     font-size: 0.8rem;
 }
+
+.fetch-row {
+    margin: 0.75rem 0;
+}
+
+.fetch-row input,
+.fetch-row select {
+    max-width: 320px;
+    margin-right: 0.5rem;
+}
+
+.navs-scroll {
+    max-height: 400px;
+    overflow-y: auto;
+}

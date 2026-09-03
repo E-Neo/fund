@@ -14,24 +14,32 @@ pub const CONFIG_FILE: &str = "config.toml";
 /// The application's SQLite pool, initialized once at startup.
 static POOL: OnceLock<SqlitePool> = OnceLock::new();
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub server: ServerConfig,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
 pub struct ServerConfig {
-    pub addr: String,
+    pub ip: String,
+    pub port: u16,
 }
 
-impl Default for Config {
+impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            server: ServerConfig {
-                addr: "127.0.0.1:8080".to_string(),
-            },
+            ip: "127.0.0.1".to_string(),
+            port: 8080,
         }
+    }
+}
+
+impl ServerConfig {
+    /// The socket address the server should bind to.
+    pub fn addr(&self) -> String {
+        format!("{}:{}", self.ip, self.port)
     }
 }
 
@@ -40,18 +48,25 @@ pub fn db_path(home: &Path) -> PathBuf {
     home.join(DB_FILE)
 }
 
-/// Load configuration from `<home>/config.toml`, falling back to defaults.
+/// Load configuration from `<home>/config.toml`. The file is required; a
+/// missing file is an error, not a fallback.
 pub fn load_config(home: &Path) -> Result<Config> {
     let path = home.join(CONFIG_FILE);
-    match std::fs::read_to_string(&path) {
-        Ok(text) => {
-            let config: Config = toml::from_str(&text)
-                .map_err(|err| Error::Parse(format!("invalid {}: {err}", path.display())))?;
-            Ok(config)
+    let text = std::fs::read_to_string(&path).map_err(|err| {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            crate::error::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!(
+                    "config file not found: {} (expected {} under --home)",
+                    path.display(),
+                    CONFIG_FILE
+                ),
+            ))
+        } else {
+            crate::error::Error::Io(err)
         }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
-        Err(err) => Err(Error::Io(err)),
-    }
+    })?;
+    toml::from_str(&text).map_err(|err| Error::Parse(format!("invalid {}: {err}", path.display())))
 }
 
 /// Open the database for a home directory and store the pool process-wide.

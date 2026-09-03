@@ -73,10 +73,26 @@ pub fn Chart(points: Vec<CurvePoint>) -> impl IntoView {
     // A y-domain refresh key, bumped on zoom so the signal updates.
     let zoom_key = RwSignal::new(0u32);
 
+    let viewbox_x = |ev: &leptos::ev::MouseEvent| -> Option<f64> {
+        use wasm_bindgen::JsCast;
+        let target = ev.current_target()?;
+        let rect = target
+            .dyn_into::<web_sys::Element>()
+            .ok()?
+            .get_bounding_client_rect();
+        if rect.width() <= 0.0 {
+            return None;
+        }
+        Some((ev.client_x() as f64 - rect.left()) * W / rect.width())
+    };
+
     let on_mousemove = move |ev: leptos::ev::MouseEvent| {
         if dragging.get() {
-            let dx = ev.client_x() as f64 - drag_start.get();
-            drag_start.set(ev.client_x() as f64);
+            let Some(x) = viewbox_x(&ev) else {
+                return;
+            };
+            let dx = x - drag_start.get();
+            drag_start.set(x);
             let span = (end.get() - start.get()).max(2) as f64;
             let shift = (dx / (W - PAD_L - PAD_R) * span).round() as isize;
             let s = start.get();
@@ -88,8 +104,7 @@ pub fn Chart(points: Vec<CurvePoint>) -> impl IntoView {
                 end.set(ne);
                 zoom_key.update(|k| *k += 1);
             }
-        } else {
-            let x = ev.offset_x() as f64;
+        } else if let Some(x) = viewbox_x(&ev) {
             let s = start.get();
             let e = end.get();
             let t = ((x - PAD_L) / (W - PAD_L - PAD_R)).clamp(0.0, 1.0);
@@ -124,8 +139,10 @@ pub fn Chart(points: Vec<CurvePoint>) -> impl IntoView {
     };
 
     let on_mousedown = move |ev: leptos::ev::MouseEvent| {
-        dragging.set(true);
-        drag_start.set(ev.client_x() as f64);
+        if let Some(x) = viewbox_x(&ev) {
+            dragging.set(true);
+            drag_start.set(x);
+        }
         ev.prevent_default();
     };
 

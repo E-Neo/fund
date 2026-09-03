@@ -14,7 +14,11 @@ async fn main() {
     let config = load_config(&home).expect("failed to load config");
     init(&home).await.expect("failed to open database");
 
-    let addr: SocketAddr = config.server.addr.parse().expect("invalid server addr");
+    let addr: SocketAddr = config
+        .server
+        .addr()
+        .parse()
+        .expect("invalid server addr in config");
 
     let app: Router = Router::new()
         .merge(fund_api::api::router())
@@ -30,6 +34,6 @@ async fn main() {
 #[command(name = "fund", about = "Fund backtesting web server")]
 struct Args {
     /// Home directory containing config.toml and db.sqlite3.
-    #[arg(long, default_value = ".")]
+    #[arg(long)]
     home: String,
 }

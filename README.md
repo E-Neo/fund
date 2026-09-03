@@ -26,17 +26,19 @@ wit/strategy.wit     WIT contract for strategies
 ## Running
 
 ```sh
-cargo run -p fund-ui -- --home <DIR>
+cargo run -- --home <DIR>
 ```
 
-`<DIR>` is the home directory containing the configuration and database:
+`--home` is required. `<DIR>` is the home directory containing the
+configuration and database:
 
-- `config.toml` — optional server configuration:
+- `config.toml` — required server configuration:
   ```toml
   [server]
-  addr = "127.0.0.1:8080"
+  ip = "127.0.0.1"
+  port = 8080
   ```
-  Missing file → defaults to `127.0.0.1:8080`.
+  Missing file → startup fails with an error.
 - `db.sqlite3` — the SQLite database (created if missing).
 
 Open http://127.0.0.1:8080 in a browser.
