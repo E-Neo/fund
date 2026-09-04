@@ -10,7 +10,8 @@ use axum::{
     routing::{get, post},
 };
 use fund_types::{
-    BacktestInput, BacktestReport, CurvePoint, FeeTier, FundInfo, NavPoint, StrategyInfo,
+    BacktestInput, BacktestMarker, BacktestReport, CurvePoint, FeeTier, FundInfo, NavPoint,
+    StrategyInfo,
 };
 
 /// Build the REST API router.
@@ -218,6 +219,27 @@ async fn run_backtest(Json(input): Json<BacktestInput>) -> Result<Json<BacktestR
         })
         .collect();
 
+    let nav_curve = result
+        .snapshots
+        .iter()
+        .map(|s| CurvePoint {
+            date: s.date.to_string(),
+            market_value: s.unit_nav,
+        })
+        .collect();
+
+    let markers = result
+        .transactions
+        .iter()
+        .map(|t| BacktestMarker {
+            date: t.date.to_string(),
+            kind: match t.kind {
+                crate::sim::event::TransactionKind::Invest { .. } => "buy".to_string(),
+                crate::sim::event::TransactionKind::Redeem { .. } => "sell".to_string(),
+            },
+        })
+        .collect();
+
     Ok(Json(BacktestReport {
         start: report.start.to_string(),
         end: report.end.to_string(),
@@ -231,6 +253,8 @@ async fn run_backtest(Json(input): Json<BacktestInput>) -> Result<Json<BacktestR
         total_return_pct: report.total_return_pct,
         max_drawdown_pct: report.max_drawdown_pct,
         curve,
+        nav_curve,
+        markers,
     }))
 }
 

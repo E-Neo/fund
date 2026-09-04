@@ -14,26 +14,15 @@ pub const CONFIG_FILE: &str = "config.toml";
 /// The application's SQLite pool, initialized once at startup.
 static POOL: OnceLock<SqlitePool> = OnceLock::new();
 
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub server: ServerConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(default)]
 pub struct ServerConfig {
     pub ip: String,
     pub port: u16,
-}
-
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            ip: "127.0.0.1".to_string(),
-            port: 8080,
-        }
-    }
 }
 
 impl ServerConfig {

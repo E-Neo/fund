@@ -1,4 +1,7 @@
-use crate::{api, chart::Chart};
+use crate::{
+    api,
+    chart::{Chart, ChartMarker, MarkerKind, Series},
+};
 use fund_types::{BacktestInput, BacktestReport, FundInfo, StrategyInfo};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -144,10 +147,45 @@ pub fn BacktestPage() -> impl IntoView {
                                 report.total_return_pct, report.max_drawdown_pct,
                             )}
                         </pre>
-                        <Chart points=report.curve.clone()/>
+                        <Chart
+                            series=vec![Series {
+                                points: report.curve.clone(),
+                                color: "#2b6cb0",
+                                name: "equity",
+                                markers: vec![],
+                            }]
+                        />
+                    </section>
+                    <section>
+                        <h3>"NAV"</h3>
+                        <Chart series=build_nav_series(&report)/>
                     </section>
                 })
             }}
         </div>
     }
+}
+
+fn build_nav_series(report: &BacktestReport) -> Vec<Series> {
+    let markers = report
+        .markers
+        .iter()
+        .filter_map(|m| {
+            let index = report.nav_curve.iter().position(|p| p.date == m.date)?;
+            Some(ChartMarker {
+                index,
+                kind: if m.kind == "buy" {
+                    MarkerKind::Buy
+                } else {
+                    MarkerKind::Sell
+                },
+            })
+        })
+        .collect();
+    vec![Series {
+        points: report.nav_curve.clone(),
+        color: "#dd6b20",
+        name: "nav",
+        markers,
+    }]
 }

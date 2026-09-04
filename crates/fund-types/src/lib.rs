@@ -47,6 +47,12 @@ pub struct CurvePoint {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BacktestMarker {
+    pub date: String,
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BacktestReport {
     pub start: String,
     pub end: String,
@@ -60,4 +66,6 @@ pub struct BacktestReport {
     pub total_return_pct: f64,
     pub max_drawdown_pct: f64,
     pub curve: Vec<CurvePoint>,
+    pub nav_curve: Vec<CurvePoint>,
+    pub markers: Vec<BacktestMarker>,
 }

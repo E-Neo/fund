@@ -9,6 +9,29 @@ const PAD_R: f64 = 20.0;
 const PAD_T: f64 = 20.0;
 const PAD_B: f64 = 40.0;
 
+/// A line to draw on the chart.
+#[derive(Debug, Clone)]
+pub struct Series {
+    pub points: Vec<CurvePoint>,
+    pub color: &'static str,
+    pub name: &'static str,
+    /// Indices into `points` to mark (buy/sell), optional.
+    pub markers: Vec<ChartMarker>,
+}
+
+/// A marker drawn on a series point.
+#[derive(Debug, Clone)]
+pub struct ChartMarker {
+    pub index: usize,
+    pub kind: MarkerKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkerKind {
+    Buy,
+    Sell,
+}
+
 fn x_pos(i: usize, s: usize, e: usize) -> f64 {
     let n = (e - s).max(1) as f64;
     let t = if e == s { 0.0 } else { (i - s) as f64 / n };
@@ -20,12 +43,17 @@ fn y_pos(v: f64, lo: f64, hi: f64) -> f64 {
     PAD_T + (1.0 - t) * (H - PAD_T - PAD_B)
 }
 
-fn y_range(points: &[CurvePoint], s: usize, e: usize) -> (f64, f64) {
+fn y_range(series: &[Series], s: usize, e: usize) -> (f64, f64) {
     let mut lo = f64::INFINITY;
     let mut hi = f64::NEG_INFINITY;
-    for p in &points[s..=e] {
-        lo = lo.min(p.market_value);
-        hi = hi.max(p.market_value);
+    for point in series
+        .iter()
+        .flat_map(|ser| ser.points.iter())
+        .take(e + 1)
+        .skip(s)
+    {
+        lo = lo.min(point.market_value);
+        hi = hi.max(point.market_value);
     }
     if !lo.is_finite() || (hi - lo).abs() < f64::EPSILON {
         return (0.0, 1.0);
@@ -59,9 +87,9 @@ fn grid_d(lo: f64, hi: f64) -> String {
 }
 
 #[component]
-pub fn Chart(points: Vec<CurvePoint>) -> impl IntoView {
-    let points = Arc::new(points);
-    let count = points.len();
+pub fn Chart(series: Vec<Series>) -> impl IntoView {
+    let series = Arc::new(series);
+    let count = series.first().map(|ser| ser.points.len()).unwrap_or(0);
     // Visible index window.
     let start = RwSignal::new(0usize);
     let end = RwSignal::new(count.saturating_sub(1).max(1));
@@ -157,37 +185,48 @@ pub fn Chart(points: Vec<CurvePoint>) -> impl IntoView {
         hover.set(None);
     };
 
-    let path_points = Arc::clone(&points);
-    let path = move || {
+    let all_points = Arc::clone(&series);
+    let paths = move || {
         let (s, e) = (start.get(), end.get());
-        let (lo, hi) = y_range(&path_points, s, e);
-        path_d(&path_points, s, e, lo, hi)
+        let (lo, hi) = y_range(&all_points, s, e);
+        all_points
+            .iter()
+            .map(|ser| {
+                let d = path_d(&ser.points, s, e, lo, hi);
+                view! {
+                    <path d=d fill="none" stroke=ser.color stroke-width="2"/>
+                }
+            })
+            .collect_view()
     };
 
-    let grid_points = Arc::clone(&points);
+    let grid_points = Arc::clone(&series);
     let grid_path = move || {
         let (s, e) = (start.get(), end.get());
         let (lo, hi) = y_range(&grid_points, s, e);
         grid_d(lo, hi)
     };
 
-    let x_points = Arc::clone(&points);
+    let x_points = Arc::clone(&series);
     let x_labels = move || {
         let s = start.get();
         let e = end.get();
+        let Some(points) = x_points.first().map(|ser| &ser.points) else {
+            return Vec::new();
+        };
         (0..=4)
             .map(|k| {
                 let i = s + ((e - s) as f64 * k as f64 / 4.0) as usize;
                 let i = i.min(e);
                 (
                     x_pos(i, s, e),
-                    x_points.get(i).map(|p| p.date.clone()).unwrap_or_default(),
+                    points.get(i).map(|p| p.date.clone()).unwrap_or_default(),
                 )
             })
             .collect::<Vec<_>>()
     };
 
-    let y_points = Arc::clone(&points);
+    let y_points = Arc::clone(&series);
     let y_labels = move || {
         let (s, e) = (start.get(), end.get());
         let (lo, hi) = y_range(&y_points, s, e);
@@ -199,28 +238,73 @@ pub fn Chart(points: Vec<CurvePoint>) -> impl IntoView {
             .collect::<Vec<_>>()
     };
 
+    let marker_points = Arc::clone(&series);
+    let markers = move || {
+        let (s, e) = (start.get(), end.get());
+        let (lo, hi) = y_range(&marker_points, s, e);
+        marker_points
+            .iter()
+            .flat_map(|ser| {
+                ser.markers.iter().filter_map(move |marker| {
+                    if marker.index < s || marker.index > e {
+                        return None;
+                    }
+                    let p = ser.points.get(marker.index)?;
+                    let x = x_pos(marker.index, s, e);
+                    let y = y_pos(p.market_value, lo, hi);
+                    let color = match marker.kind {
+                        MarkerKind::Buy => "#d63a3a",
+                        MarkerKind::Sell => "#2b6cb0",
+                    };
+                    Some(view! {
+                        <circle cx=x cy=y r="3.5" fill=color stroke="#fff" stroke-width="1"/>
+                    })
+                })
+            })
+            .collect_view()
+    };
+
+    let hover_series = Arc::clone(&series);
     let hover_line = move || {
         hover.get().map(|i| {
             let x = x_pos(i, start.get(), end.get());
-            view! { <line x1=x x2=x y1=PAD_T y2={H-PAD_B} stroke="#666" stroke-width="1"/> }
+            let y = {
+                let (s, e) = (start.get(), end.get());
+                let (lo, hi) = y_range(&hover_series, s, e);
+                hover_series
+                    .first()
+                    .and_then(|ser| ser.points.get(i))
+                    .map(|p| y_pos(p.market_value, lo, hi))
+                    .unwrap_or(PAD_T)
+            };
+            view! {
+                <line x1=x x2=x y1=PAD_T y2={H-PAD_B} stroke="#666" stroke-width="1"/>
+                <line x1={PAD_L} x2={W-PAD_R} y1=y y2=y stroke="#666" stroke-width="1" stroke-dasharray="3,3"/>
+            }
         })
     };
 
-    let hover_points = Arc::clone(&points);
+    let hover_points = Arc::clone(&series);
     let hover_label = move || {
-        hover.get().and_then(|i| hover_points.get(i)).map(|p| {
-            let i = hover.get().unwrap();
+        hover.get().and_then(|i| {
             let x = x_pos(i, start.get(), end.get());
             let (s, e) = (start.get(), end.get());
             let (lo, hi) = y_range(&hover_points, s, e);
-            let y = y_pos(p.market_value, lo, hi);
+            let primary = hover_points.first().and_then(|ser| ser.points.get(i))?;
+            let y = y_pos(primary.market_value, lo, hi);
+            let text = hover_points
+                .iter()
+                .filter_map(|ser| ser.points.get(i).map(|p| (ser.name, p.market_value)))
+                .map(|(name, value)| format!("{name}: {value:.4}"))
+                .collect::<Vec<_>>()
+                .join("  ");
             let x = if x > W - 160.0 { x - 160.0 } else { x + 10.0 };
             let y = if y < 40.0 { y + 20.0 } else { y - 10.0 };
-            view! {
+            Some(view! {
                 <text x=x y=y class="tooltip">
-                    {format!("{}  {:.4}", p.date, p.market_value)}
+                    {format!("{}  {text}", primary.date)}
                 </text>
-            }
+            })
         })
     };
 
@@ -244,7 +328,8 @@ pub fn Chart(points: Vec<CurvePoint>) -> impl IntoView {
                 {move || y_labels().into_iter().map(|(y, v)| view! {
                     <text x={PAD_L-8.0} y=y class="axis" text-anchor="end">{format!("{v:.0}")}</text>
                 }).collect_view()}
-                <path d=path fill="none" stroke="#2b6cb0" stroke-width="2"/>
+                {paths}
+                {markers}
                 {hover_line}
                 {hover_label}
             </svg>
