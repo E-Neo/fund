@@ -72,12 +72,19 @@ button {
     fill: #666;
 }
 
-.tooltip {
-    font-size: 12px;
-    fill: #fff;
-    stroke: #333;
-    paint-order: stroke;
-    stroke-width: 3px;
+.crosshair {
+    font-size: 11px;
+    fill: #333;
+    font-weight: 600;
+}
+
+.reset-btn {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    margin: 0;
+    padding: 0.3rem 0.7rem;
+    font-size: 0.8rem;
 }
 
 .hint {
@@ -93,9 +100,4 @@ button {
 .fetch-row select {
     max-width: 320px;
     margin-right: 0.5rem;
-}
-
-.navs-scroll {
-    max-height: 400px;
-    overflow-y: auto;
 }

@@ -9,7 +9,6 @@ use leptos::task::spawn_local;
 #[component]
 pub fn BacktestPage() -> impl IntoView {
     let code = RwSignal::new(String::new());
-    let search = RwSignal::new(String::new());
     let strategy = RwSignal::new(String::from("buy_hold"));
     let initial = RwSignal::new(1000.0f64);
     let dca_amount = RwSignal::new(100.0f64);
@@ -62,15 +61,7 @@ pub fn BacktestPage() -> impl IntoView {
     view! {
         <h2>"Backtest"</h2>
         <form>
-            <label for="fund-code">"Fund"</label>
-            <input
-                id="fund-code"
-                name="fund-code"
-                type="search"
-                placeholder="search by code or name"
-                prop:value=search
-                on:input=move |e| search.set(event_target_value(&e))
-            />
+            <label for="fund-select">"Fund"</label>
             <select
                 id="fund-select"
                 name="fund-select"
@@ -79,22 +70,15 @@ pub fn BacktestPage() -> impl IntoView {
             >
                 <option value="">"Select a fund..."</option>
                 {move || match funds.get() {
-                    Some(Ok(list)) => {
-                        let query = search.get();
-                        list.iter()
-                            .filter(move |fund| {
-                                query.is_empty()
-                                    || fund.code.contains(&query)
-                                    || fund.name.contains(&query)
-                            })
-                            .map(|fund| view! {
-                                <option value=fund.code.clone()>
-                                    {format!("{} ({})", fund.name, fund.code)}
-                                </option>
-                            })
-                            .collect_view()
-                            .into_any()
-                    }
+                    Some(Ok(list)) => list
+                        .iter()
+                        .map(|fund| view! {
+                            <option value=fund.code.clone()>
+                                {format!("{} ({})", fund.name, fund.code)}
+                            </option>
+                        })
+                        .collect_view()
+                        .into_any(),
                     _ => view! { <option>"Loading..."</option> }.into_any(),
                 }}
             </select>

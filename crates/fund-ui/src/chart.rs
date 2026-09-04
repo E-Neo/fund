@@ -86,6 +86,18 @@ fn grid_d(lo: f64, hi: f64) -> String {
     d
 }
 
+/// Map a mouse client x to viewBox units using the element's bounding rect.
+fn viewbox_x(client_x: f64, target: Option<&web_sys::EventTarget>) -> Option<f64> {
+    use wasm_bindgen::JsCast;
+    let rect = target?
+        .dyn_ref::<web_sys::Element>()?
+        .get_bounding_client_rect();
+    if rect.width() <= 0.0 {
+        return None;
+    }
+    Some((client_x - rect.left()) * W / rect.width())
+}
+
 #[component]
 pub fn Chart(series: Vec<Series>) -> impl IntoView {
     let series = Arc::new(series);
@@ -95,44 +107,46 @@ pub fn Chart(series: Vec<Series>) -> impl IntoView {
     let end = RwSignal::new(count.saturating_sub(1).max(1));
     // Hovered index.
     let hover = RwSignal::new(None::<usize>);
-    // Drag panning state.
+    // Pointer inside the figure.
+    let hovering = RwSignal::new(false);
+    // Range-selection drag state (viewBox x units).
     let dragging = RwSignal::new(false);
-    let drag_start = RwSignal::new(0.0f64);
+    let sel_start = RwSignal::new(None::<f64>);
+    let sel_end = RwSignal::new(None::<f64>);
     // A y-domain refresh key, bumped on zoom so the signal updates.
     let zoom_key = RwSignal::new(0u32);
 
-    let viewbox_x = |ev: &leptos::ev::MouseEvent| -> Option<f64> {
-        use wasm_bindgen::JsCast;
-        let target = ev.current_target()?;
-        let rect = target
-            .dyn_into::<web_sys::Element>()
-            .ok()?
-            .get_bounding_client_rect();
-        if rect.width() <= 0.0 {
-            return None;
+    // Complete a drag selection by zooming the window to the selected range.
+    let finalize_selection: Arc<dyn Fn()> = Arc::new(move || {
+        dragging.set(false);
+        let (Some(x1), Some(x2)) = (sel_start.get_untracked(), sel_end.get_untracked()) else {
+            return;
+        };
+        sel_start.set(None);
+        sel_end.set(None);
+        if (x2 - x1).abs() < 6.0 {
+            return;
         }
-        Some((ev.client_x() as f64 - rect.left()) * W / rect.width())
-    };
+        let s = start.get_untracked();
+        let e = end.get_untracked();
+        let t1 = ((x1 - PAD_L) / (W - PAD_L - PAD_R)).clamp(0.0, 1.0);
+        let t2 = ((x2 - PAD_L) / (W - PAD_L - PAD_R)).clamp(0.0, 1.0);
+        let i1 = (s as f64 + t1 * (e - s) as f64).round() as usize;
+        let i2 = (s as f64 + t2 * (e - s) as f64).round() as usize;
+        let (lo, hi) = (i1.min(i2), i1.max(i2));
+        if hi > lo {
+            start.set(lo);
+            end.set(hi);
+            zoom_key.update(|k| *k += 1);
+        }
+    });
 
     let on_mousemove = move |ev: leptos::ev::MouseEvent| {
         if dragging.get() {
-            let Some(x) = viewbox_x(&ev) else {
-                return;
-            };
-            let dx = x - drag_start.get();
-            drag_start.set(x);
-            let span = (end.get() - start.get()).max(2) as f64;
-            let shift = (dx / (W - PAD_L - PAD_R) * span).round() as isize;
-            let s = start.get();
-            let e = end.get();
-            let ns = (s as isize + shift).clamp(0, count as isize - 1) as usize;
-            let ne = (e as isize + shift).clamp(0, count as isize - 1) as usize;
-            if ne > ns {
-                start.set(ns);
-                end.set(ne);
-                zoom_key.update(|k| *k += 1);
+            if let Some(x) = viewbox_x(ev.client_x() as f64, ev.current_target().as_ref()) {
+                sel_end.set(Some(x));
             }
-        } else if let Some(x) = viewbox_x(&ev) {
+        } else if let Some(x) = viewbox_x(ev.client_x() as f64, ev.current_target().as_ref()) {
             let s = start.get();
             let e = end.get();
             let t = ((x - PAD_L) / (W - PAD_L - PAD_R)).clamp(0.0, 1.0);
@@ -141,41 +155,59 @@ pub fn Chart(series: Vec<Series>) -> impl IntoView {
         }
     };
 
+    let on_enter = move |_| {
+        hovering.set(true);
+    };
+
+    let finalize_leave = Arc::clone(&finalize_selection);
     let on_leave = move |_| {
+        hovering.set(false);
         hover.set(None);
+        if dragging.get_untracked() {
+            finalize_leave();
+        }
     };
 
     let on_wheel = move |ev: leptos::ev::WheelEvent| {
         let s = start.get();
         let e = end.get();
-        let delta = if ev.delta_y() > 0.0 { 1 } else { -1 };
-        let span = (e - s).max(2) as isize;
-        let grow = (span / 4).max(2);
-        let (ns, ne) = if delta > 0 {
-            let ns = (s as isize + grow).min(e as isize - 2) as usize;
-            (ns, (e as isize - grow).max(ns as isize + 2) as usize)
+        let x = viewbox_x(ev.client_x() as f64, ev.current_target().as_ref());
+        let t = x
+            .map(|x| ((x - PAD_L) / (W - PAD_L - PAD_R)).clamp(0.0, 1.0))
+            .unwrap_or(0.5);
+        let span = (e - s).max(2) as f64;
+        let max = (count - 1).max(1) as f64;
+        let min_span = 2.0;
+        // Scroll up zooms in, scroll down zooms out, centered on the mouse.
+        let new_span = if ev.delta_y() < 0.0 {
+            (span * 0.5).max(min_span)
         } else {
-            let ns = (s as isize - grow).max(0) as usize;
-            let ne = (e as isize + grow).min(count as isize - 1) as usize;
-            (ns, ne)
+            (span * 2.0).min(max)
         };
-        start.set(ns);
-        end.set(ne);
+        let mouse_index = s as f64 + t * (e - s) as f64;
+        let ns = (mouse_index - t * new_span).clamp(0.0, max - new_span);
+        let ne = ns + new_span;
+        start.set(ns.round() as usize);
+        end.set(ne.round() as usize);
         zoom_key.update(|k| *k += 1);
         hover.set(None);
         ev.prevent_default();
     };
 
     let on_mousedown = move |ev: leptos::ev::MouseEvent| {
-        if let Some(x) = viewbox_x(&ev) {
+        if let Some(x) = viewbox_x(ev.client_x() as f64, ev.current_target().as_ref()) {
             dragging.set(true);
-            drag_start.set(x);
+            sel_start.set(Some(x));
+            sel_end.set(Some(x));
         }
         ev.prevent_default();
     };
 
+    let finalize_up = Arc::clone(&finalize_selection);
     let on_mouseup = move |_| {
-        dragging.set(false);
+        if dragging.get_untracked() {
+            finalize_up();
+        }
     };
 
     let on_reset = move |_| {
@@ -183,6 +215,8 @@ pub fn Chart(series: Vec<Series>) -> impl IntoView {
         end.set(count.saturating_sub(1).max(1));
         zoom_key.update(|k| *k += 1);
         hover.set(None);
+        sel_start.set(None);
+        sel_end.set(None);
     };
 
     let all_points = Arc::clone(&series);
@@ -218,9 +252,17 @@ pub fn Chart(series: Vec<Series>) -> impl IntoView {
             .map(|k| {
                 let i = s + ((e - s) as f64 * k as f64 / 4.0) as usize;
                 let i = i.min(e);
+                let anchor = if k == 0 {
+                    "start"
+                } else if k == 4 {
+                    "end"
+                } else {
+                    "middle"
+                };
                 (
                     x_pos(i, s, e),
                     points.get(i).map(|p| p.date.clone()).unwrap_or_default(),
+                    anchor,
                 )
             })
             .collect::<Vec<_>>()
@@ -285,56 +327,107 @@ pub fn Chart(series: Vec<Series>) -> impl IntoView {
     };
 
     let hover_points = Arc::clone(&series);
-    let hover_label = move || {
+    let hover_labels = move || {
         hover.get().and_then(|i| {
-            let x = x_pos(i, start.get(), end.get());
             let (s, e) = (start.get(), end.get());
             let (lo, hi) = y_range(&hover_points, s, e);
             let primary = hover_points.first().and_then(|ser| ser.points.get(i))?;
+            let x = x_pos(i, s, e);
             let y = y_pos(primary.market_value, lo, hi);
-            let text = hover_points
-                .iter()
-                .filter_map(|ser| ser.points.get(i).map(|p| (ser.name, p.market_value)))
-                .map(|(name, value)| format!("{name}: {value:.4}"))
-                .collect::<Vec<_>>()
-                .join("  ");
-            let x = if x > W - 160.0 { x - 160.0 } else { x + 10.0 };
-            let y = if y < 40.0 { y + 20.0 } else { y - 10.0 };
-            Some(view! {
-                <text x=x y=y class="tooltip">
-                    {format!("{}  {text}", primary.date)}
+            // X (date) label near the bottom of the vertical line.
+            let (x_anchor, x_x) = if x > W - 40.0 {
+                ("end", x - 6.0)
+            } else if x < PAD_L + 40.0 {
+                ("start", x + 6.0)
+            } else {
+                ("middle", x)
+            };
+            let x_label = view! {
+                <text x=x_x y={H-PAD_B+14.0} class="crosshair" text-anchor=x_anchor>
+                    {primary.date.clone()}
                 </text>
+            };
+            // Y (value) label to the left of the horizontal line.
+            let y_y = if y < PAD_T + 14.0 { y + 14.0 } else { y - 8.0 };
+            let y_label = view! {
+                <text x={PAD_L-8.0} y=y_y class="crosshair" text-anchor="end">
+                    {format!("{:.4}", primary.market_value)}
+                </text>
+            };
+            Some(view! {
+                <circle cx=x cy=y r="3" fill="#333"/>
+                {x_label}
+                {y_label}
             })
         })
     };
 
+    let sel_rect = move || {
+        let (Some(a), Some(b)) = (sel_start.get(), sel_end.get()) else {
+            return None;
+        };
+        let (x1, x2) = if a <= b { (a, b) } else { (b, a) };
+        let x1 = x1.clamp(PAD_L, W - PAD_R);
+        let x2 = x2.clamp(PAD_L, W - PAD_R);
+        if x2 - x1 < 0.5 {
+            return None;
+        }
+        Some(view! {
+            <rect
+                x=x1
+                y=PAD_T
+                width={x2-x1}
+                height={H-PAD_T-PAD_B}
+                fill="#888"
+                opacity="0.25"
+            />
+        })
+    };
+
+    let show_reset = move || {
+        let zoomed = start.get() > 0 || end.get() < count.saturating_sub(1).max(1);
+        hovering.get() || zoomed
+    };
+
     view! {
         <div>
-            <svg
-                viewBox=format!("0 0 {W} {H}")
-                style="width:100%;height:auto;background:#fafafa;touch-action:none"
-                on:mousemove=on_mousemove
+            <div
+                style="position:relative"
+                on:mouseenter=on_enter
                 on:mouseleave=on_leave
-                on:wheel=on_wheel
-                on:mousedown=on_mousedown
-                on:mouseup=on_mouseup
             >
-                <g class="grid" stroke="#ddd">
-                    <path d=grid_path fill="none"/>
-                </g>
-                {move || x_labels().into_iter().map(|(x, label)| view! {
-                    <text x=x y={H-12.0} class="axis" text-anchor="middle">{label}</text>
-                }).collect_view()}
-                {move || y_labels().into_iter().map(|(y, v)| view! {
-                    <text x={PAD_L-8.0} y=y class="axis" text-anchor="end">{format!("{v:.0}")}</text>
-                }).collect_view()}
-                {paths}
-                {markers}
-                {hover_line}
-                {hover_label}
-            </svg>
-            <button on:click=on_reset>"Reset view"</button>
-            <p class="hint">"Scroll to zoom, drag to pan, hover for values."</p>
+                <svg
+                    viewBox=format!("0 0 {W} {H}")
+                    style="width:100%;height:auto;background:#fafafa;touch-action:none"
+                    on:mousemove=on_mousemove
+                    on:wheel=on_wheel
+                    on:mousedown=on_mousedown
+                    on:mouseup=on_mouseup
+                >
+                    <g class="grid" stroke="#ddd">
+                        <path d=grid_path fill="none"/>
+                    </g>
+                    {move || x_labels().into_iter().map(|(x, label, anchor)| view! {
+                        <text x=x y={H-12.0} class="axis" text-anchor=anchor>{label}</text>
+                    }).collect_view()}
+                    {move || y_labels().into_iter().map(|(y, v)| view! {
+                        <text x={PAD_L-8.0} y=y class="axis" text-anchor="end">{format!("{v:.4}")}</text>
+                    }).collect_view()}
+                    {paths}
+                    {markers}
+                    {sel_rect}
+                    {hover_line}
+                    {hover_labels}
+                </svg>
+                {move || if show_reset() {
+                    view! {
+                        <button class="reset-btn" on:click=on_reset>"Reset view"</button>
+                    }.into_any()
+                } else {
+                    ().into_any()
+                }}
+            </div>
+            <p class="hint">"Scroll to zoom, drag to select a range, hover for values."</p>
         </div>
     }
 }
