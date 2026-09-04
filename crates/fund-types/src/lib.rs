@@ -37,7 +37,12 @@ pub struct BacktestInput {
     pub dca_interval: u64,
     pub from: Option<String>,
     pub to: Option<String>,
-    pub no_rules: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NavRange {
+    pub from: String,
+    pub to: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,4 +73,8 @@ pub struct BacktestReport {
     pub curve: Vec<CurvePoint>,
     pub nav_curve: Vec<CurvePoint>,
     pub markers: Vec<BacktestMarker>,
+    pub return_curve: Vec<CurvePoint>,
+    pub drawdown_curve: Vec<CurvePoint>,
+    pub invested_curve: Vec<CurvePoint>,
+    pub redeemed_curve: Vec<CurvePoint>,
 }

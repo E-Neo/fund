@@ -4,7 +4,7 @@
 //! native `fetch` API. Elsewhere (the host build) they are never used and
 //! return a "not on client" error.
 
-use fund_types::{BacktestInput, BacktestReport, FundInfo, NavPoint, StrategyInfo};
+use fund_types::{BacktestInput, BacktestReport, FundInfo, NavPoint, NavRange, StrategyInfo};
 
 pub type ApiResult<T> = Result<T, String>;
 
@@ -83,4 +83,8 @@ pub async fn run_backtest(input: BacktestInput) -> ApiResult<BacktestReport> {
 
 pub async fn fund_navs(code: String) -> ApiResult<Vec<NavPoint>> {
     send("GET", &format!("/api/funds/{code}/navs"), None).await
+}
+
+pub async fn fund_range(code: String) -> ApiResult<NavRange> {
+    send("GET", &format!("/api/funds/{code}/range"), None).await
 }

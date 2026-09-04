@@ -11,7 +11,7 @@ use axum::{
 };
 use fund_types::{
     BacktestInput, BacktestMarker, BacktestReport, CurvePoint, FeeTier, FundInfo, NavPoint,
-    StrategyInfo,
+    NavRange, StrategyInfo,
 };
 
 /// Build the REST API router.
@@ -21,6 +21,7 @@ pub fn router() -> Router {
         .route("/api/funds/{code}/fetch", post(fetch_fund))
         .route("/api/funds/{code}/update", post(update_fund))
         .route("/api/funds/{code}/navs", get(fund_navs))
+        .route("/api/funds/{code}/range", get(fund_range))
         .route("/api/funds/{code}/rules", get(fund_rules))
         .route("/api/strategies", get(list_strategies))
         .route("/api/backtest", post(run_backtest))
@@ -119,6 +120,25 @@ async fn fund_navs(Path(code): Path<String>) -> Result<Json<Vec<NavPoint>>, ApiE
     ))
 }
 
+async fn fund_range(Path(code): Path<String>) -> Result<Json<NavRange>, ApiError> {
+    let navs = crate::db::load_navs(config::pool(), &code)
+        .await
+        .map_err(api_err)?;
+    let (first, last) = match (navs.first(), navs.last()) {
+        (Some(f), Some(l)) => (f.date, l.date),
+        _ => {
+            return Err((
+                axum::http::StatusCode::NOT_FOUND,
+                format!("no data stored for fund code {code}"),
+            ));
+        }
+    };
+    Ok(Json(NavRange {
+        from: first.to_string(),
+        to: last.to_string(),
+    }))
+}
+
 async fn fund_rules(Path(code): Path<String>) -> Result<Json<Vec<FeeTier>>, ApiError> {
     let rule = crate::db::load_rules(config::pool(), &code)
         .await
@@ -192,13 +212,9 @@ async fn run_backtest(Json(input): Json<BacktestInput>) -> Result<Json<BacktestR
     let end = navs.last().expect("non-empty").date;
     let days = navs.len();
 
-    let stored = if input.no_rules {
-        None
-    } else {
-        crate::db::load_rules(config::pool(), &input.code)
-            .await
-            .map_err(api_err)?
-    };
+    let stored = crate::db::load_rules(config::pool(), &input.code)
+        .await
+        .map_err(api_err)?;
     let fee_rule = stored.unwrap_or_else(|| FeeRule {
         subscribe: vec![],
         redeem: vec![],
@@ -240,6 +256,49 @@ async fn run_backtest(Json(input): Json<BacktestInput>) -> Result<Json<BacktestR
         })
         .collect();
 
+    let mut peak = f64::NEG_INFINITY;
+    let return_curve = result
+        .snapshots
+        .iter()
+        .map(|s| CurvePoint {
+            date: s.date.to_string(),
+            market_value: s.return_pct(),
+        })
+        .collect();
+    let drawdown_curve = result
+        .snapshots
+        .iter()
+        .map(|s| {
+            let value = s.market_value();
+            peak = peak.max(value);
+            let dd = if peak > 0.0 {
+                (peak - value) / peak * 100.0
+            } else {
+                0.0
+            };
+            CurvePoint {
+                date: s.date.to_string(),
+                market_value: dd,
+            }
+        })
+        .collect();
+    let invested_curve = result
+        .snapshots
+        .iter()
+        .map(|s| CurvePoint {
+            date: s.date.to_string(),
+            market_value: s.cumulative_investment,
+        })
+        .collect();
+    let redeemed_curve = result
+        .snapshots
+        .iter()
+        .map(|s| CurvePoint {
+            date: s.date.to_string(),
+            market_value: s.cumulative_redemption,
+        })
+        .collect();
+
     Ok(Json(BacktestReport {
         start: report.start.to_string(),
         end: report.end.to_string(),
@@ -255,6 +314,10 @@ async fn run_backtest(Json(input): Json<BacktestInput>) -> Result<Json<BacktestR
         curve,
         nav_curve,
         markers,
+        return_curve,
+        drawdown_curve,
+        invested_curve,
+        redeemed_curve,
     }))
 }
 

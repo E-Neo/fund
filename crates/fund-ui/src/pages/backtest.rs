@@ -2,7 +2,7 @@ use crate::{
     api,
     chart::{Chart, ChartMarker, MarkerKind, Series},
 };
-use fund_types::{BacktestInput, BacktestReport, FundInfo, StrategyInfo};
+use fund_types::{BacktestInput, BacktestReport, FundInfo, NavRange, StrategyInfo};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -13,7 +13,9 @@ pub fn BacktestPage() -> impl IntoView {
     let initial = RwSignal::new(1000.0f64);
     let dca_amount = RwSignal::new(100.0f64);
     let dca_interval = RwSignal::new(7u64);
-    let no_rules = RwSignal::new(false);
+    let from = RwSignal::new(String::new());
+    let to = RwSignal::new(String::new());
+    let range = RwSignal::new(None::<NavRange>);
 
     let strategies = RwSignal::new(None::<Result<Vec<StrategyInfo>, String>>);
     let funds = RwSignal::new(None::<Result<Vec<FundInfo>, String>>);
@@ -34,16 +36,45 @@ pub fn BacktestPage() -> impl IntoView {
     let report = RwSignal::new(None::<BacktestReport>);
     let running = RwSignal::new(false);
 
+    let on_fund_change = move |e: leptos::ev::Event| {
+        let value = event_target_value(&e);
+        code.set(value.clone());
+        if value.is_empty() {
+            range.set(None);
+            from.set(String::new());
+            to.set(String::new());
+            return;
+        }
+        let future = api::fund_range(value);
+        spawn_local(async move {
+            match future.await {
+                Ok(r) => {
+                    from.set(r.from.clone());
+                    to.set(r.to.clone());
+                    range.set(Some(r));
+                }
+                Err(err) => leptos::logging::error!("failed to load range: {err}"),
+            }
+        });
+    };
+
     let on_run = move |_| {
+        let from = {
+            let v = from.get_untracked();
+            if v.is_empty() { None } else { Some(v) }
+        };
+        let to = {
+            let v = to.get_untracked();
+            if v.is_empty() { None } else { Some(v) }
+        };
         let input = BacktestInput {
             code: code.get_untracked(),
             strategy: strategy.get_untracked(),
             initial: initial.get_untracked(),
             dca_amount: dca_amount.get_untracked(),
             dca_interval: dca_interval.get_untracked(),
-            from: None,
-            to: None,
-            no_rules: no_rules.get_untracked(),
+            from,
+            to,
         };
         running.set(true);
         let future = api::run_backtest(input);
@@ -58,6 +89,9 @@ pub fn BacktestPage() -> impl IntoView {
         });
     };
 
+    let range_min = move || range.get().map(|r| r.from).unwrap_or_default();
+    let range_max = move || range.get().map(|r| r.to).unwrap_or_default();
+
     view! {
         <h2>"Backtest"</h2>
         <form>
@@ -66,7 +100,7 @@ pub fn BacktestPage() -> impl IntoView {
                 id="fund-select"
                 name="fund-select"
                 prop:value=code
-                on:change=move |e| code.set(event_target_value(&e))
+                on:change=on_fund_change
             >
                 <option value="">"Select a fund..."</option>
                 {move || match funds.get() {
@@ -94,6 +128,26 @@ pub fn BacktestPage() -> impl IntoView {
                     None => view! { <option>"Loading..."</option> }.into_any(),
                 }}
             </select>
+            <label for="from">"From"</label>
+            <input
+                id="from"
+                name="from"
+                type="date"
+                prop:value=from
+                min=range_min
+                max=range_max
+                on:input=move |e| from.set(event_target_value(&e))
+            />
+            <label for="to">"To"</label>
+            <input
+                id="to"
+                name="to"
+                type="date"
+                prop:value=to
+                min=range_min
+                max=range_max
+                on:input=move |e| to.set(event_target_value(&e))
+            />
             <label for="initial">"Initial amount"</label>
             <input id="initial" name="initial" type="number" prop:value=initial on:input=move |e| {
                 if let Ok(v) = event_target_value(&e).parse() { initial.set(v) }
@@ -106,12 +160,6 @@ pub fn BacktestPage() -> impl IntoView {
             <input id="dca_interval" name="dca_interval" type="number" prop:value=dca_interval on:input=move |e| {
                 if let Ok(v) = event_target_value(&e).parse() { dca_interval.set(v) }
             } />
-            <label for="no_rules">
-                <input id="no_rules" name="no_rules" type="checkbox" prop:checked=no_rules on:change=move |e| {
-                    no_rules.set(event_target_checked(&e));
-                } />
-                "Ignore stored fee rules"
-            </label>
             <button type="button" on:click=on_run disabled=move || running.get()>
                 {move || if running.get() { "Running..." } else { "Run" }}
             </button>
@@ -132,6 +180,8 @@ pub fn BacktestPage() -> impl IntoView {
                             )}
                         </pre>
                         <Chart
+                            title="Equity curve".to_string()
+                            y_label="Value".to_string()
                             series=vec![Series {
                                 points: report.curve.clone(),
                                 color: "#2b6cb0",
@@ -142,7 +192,58 @@ pub fn BacktestPage() -> impl IntoView {
                     </section>
                     <section>
                         <h3>"NAV"</h3>
-                        <Chart series=build_nav_series(&report)/>
+                        <Chart
+                            title="NAV".to_string()
+                            y_label="NAV".to_string()
+                            series=build_nav_series(&report)
+                        />
+                    </section>
+                    <section>
+                        <h3>"Cumulative return"</h3>
+                        <Chart
+                            title="Cumulative return".to_string()
+                            y_label="%".to_string()
+                            series=vec![Series {
+                                points: report.return_curve.clone(),
+                                color: "#38a169",
+                                name: "return",
+                                markers: vec![],
+                            }]
+                        />
+                    </section>
+                    <section>
+                        <h3>"Drawdown"</h3>
+                        <Chart
+                            title="Drawdown".to_string()
+                            y_label="%".to_string()
+                            series=vec![Series {
+                                points: report.drawdown_curve.clone(),
+                                color: "#d63a3a",
+                                name: "drawdown",
+                                markers: vec![],
+                            }]
+                        />
+                    </section>
+                    <section>
+                        <h3>"Invested vs Redeemed"</h3>
+                        <Chart
+                            title="Invested vs Redeemed".to_string()
+                            y_label="Amount".to_string()
+                            series=vec![
+                                Series {
+                                    points: report.invested_curve.clone(),
+                                    color: "#dd6b20",
+                                    name: "invested",
+                                    markers: vec![],
+                                },
+                                Series {
+                                    points: report.redeemed_curve.clone(),
+                                    color: "#2b6cb0",
+                                    name: "redeemed",
+                                    markers: vec![],
+                                },
+                            ]
+                        />
                     </section>
                 })
             }}

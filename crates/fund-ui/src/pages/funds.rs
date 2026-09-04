@@ -26,34 +26,37 @@ fn FundRow(fund: FundInfo, on_update: Arc<dyn Fn(String) + Send + Sync>) -> impl
         }
     };
 
+    let on_update_row = on_update.clone();
     view! {
-        <tr>
+        <tr on:click=toggle>
             <td>{fund_code.clone()}</td>
             <td>{fund.name.clone()}</td>
             <td>
-                <button on:click=move |_| on_update(update_code.clone())>"Update"</button>
-            </td>
-            <td>
-                <button on:click=toggle>
-                    {move || if expanded.get() { "Hide chart" } else { "Show chart" }}
-                </button>
+                <button on:click=move |ev| {
+                    ev.stop_propagation();
+                    on_update_row(update_code.clone());
+                }>"Update"</button>
             </td>
         </tr>
         {move || if expanded.get() {
             view! {
                 <tr>
-                    <td colspan="4">
+                    <td colspan="3">
                         {match navs.get() {
                             Some(Ok(list)) => view! {
-                                <Chart series=vec![Series {
-                                    points: list.iter().map(|n| CurvePoint {
-                                        date: n.date.clone(),
-                                        market_value: n.unit_nav,
-                                    }).collect(),
-                                    color: "#dd6b20",
-                                    name: "nav",
-                                    markers: vec![],
-                                }]/>
+                                <Chart
+                                    title=format!("NAV — {}", fund.name)
+                                    y_label="NAV".to_string()
+                                    series=vec![Series {
+                                        points: list.iter().map(|n| CurvePoint {
+                                            date: n.date.clone(),
+                                            market_value: n.unit_nav,
+                                        }).collect(),
+                                        color: "#dd6b20",
+                                        name: "nav",
+                                        markers: vec![],
+                                    }]
+                                />
                             }.into_any(),
                             Some(Err(err)) => view! { <p>{format!("Error: {err}")}</p> }.into_any(),
                             None => view! { <p>"Loading..."</p> }.into_any(),
@@ -141,7 +144,7 @@ pub fn FundsPage() -> impl IntoView {
                         view! {
                             <table>
                                 <thead>
-                                    <tr><th>"Code"</th><th>"Name"</th><th></th><th></th></tr>
+                                    <tr><th>"Code"</th><th>"Name"</th><th></th></tr>
                                 </thead>
                                 <tbody>
                                     {list.iter().map(|fund| {

@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 const W: f64 = 800.0;
 const H: f64 = 300.0;
-const PAD_L: f64 = 60.0;
 const PAD_R: f64 = 20.0;
 const PAD_T: f64 = 20.0;
 const PAD_B: f64 = 40.0;
@@ -32,10 +31,27 @@ pub enum MarkerKind {
     Sell,
 }
 
-fn x_pos(i: usize, s: usize, e: usize) -> f64 {
+/// Width of the widest `{:.4}` y-label for the range, used as the left padding.
+fn pad_l_for(lo: f64, hi: f64) -> f64 {
+    let mut max: f64 = 16.0;
+    for k in 0..=4 {
+        let v = lo + (hi - lo) * k as f64 / 4.0;
+        let text = format!("{v:.4}");
+        max = max.max(text.len() as f64 * 7.0 + 8.0);
+    }
+    max
+}
+
+fn x_pos(i: usize, s: usize, e: usize, pad_l: f64) -> f64 {
     let n = (e - s).max(1) as f64;
     let t = if e == s { 0.0 } else { (i - s) as f64 / n };
-    PAD_L + t * (W - PAD_L - PAD_R)
+    pad_l + t * (W - pad_l - PAD_R)
+}
+
+fn index_at_x(x: f64, s: usize, e: usize, pad_l: f64) -> usize {
+    let t = ((x - pad_l) / (W - pad_l - PAD_R)).clamp(0.0, 1.0);
+    let i = (s as f64 + t * (e - s) as f64).round() as usize;
+    i.min(e)
 }
 
 fn y_pos(v: f64, lo: f64, hi: f64) -> f64 {
@@ -62,10 +78,10 @@ fn y_range(series: &[Series], s: usize, e: usize) -> (f64, f64) {
     (lo - pad, hi + pad)
 }
 
-fn path_d(points: &[CurvePoint], s: usize, e: usize, lo: f64, hi: f64) -> String {
+fn path_d(points: &[CurvePoint], s: usize, e: usize, lo: f64, hi: f64, pad_l: f64) -> String {
     let mut d = String::new();
     for (k, p) in points[s..=e].iter().enumerate() {
-        let x = x_pos(s + k, s, e);
+        let x = x_pos(s + k, s, e, pad_l);
         let y = y_pos(p.market_value, lo, hi);
         if k == 0 {
             d.push_str(&format!("M {x:.1} {y:.1}"));
@@ -76,12 +92,12 @@ fn path_d(points: &[CurvePoint], s: usize, e: usize, lo: f64, hi: f64) -> String
     d
 }
 
-fn grid_d(lo: f64, hi: f64) -> String {
+fn grid_d(lo: f64, hi: f64, pad_l: f64) -> String {
     let mut d = String::new();
     for k in 0..=4 {
         let v = lo + (hi - lo) * k as f64 / 4.0;
         let y = y_pos(v, lo, hi);
-        d.push_str(&format!("M {PAD_L:.1} {y:.1} L {:.1} {y:.1}", W - PAD_R));
+        d.push_str(&format!("M {pad_l:.1} {y:.1} L {:.1} {y:.1}", W - PAD_R));
     }
     d
 }
@@ -99,7 +115,15 @@ fn viewbox_x(client_x: f64, target: Option<&web_sys::EventTarget>) -> Option<f64
 }
 
 #[component]
-pub fn Chart(series: Vec<Series>) -> impl IntoView {
+pub fn Chart(
+    series: Vec<Series>,
+    #[prop(optional)] title: Option<String>,
+    #[prop(optional)] x_label: Option<String>,
+    #[prop(optional)] y_label: Option<String>,
+) -> impl IntoView {
+    let title = title.unwrap_or_default();
+    let x_label = x_label.unwrap_or_else(|| "Date".to_string());
+    let y_label = y_label.unwrap_or_else(|| "Value".to_string());
     let series = Arc::new(series);
     let count = series.first().map(|ser| ser.points.len()).unwrap_or(0);
     // Visible index window.
@@ -117,6 +141,7 @@ pub fn Chart(series: Vec<Series>) -> impl IntoView {
     let zoom_key = RwSignal::new(0u32);
 
     // Complete a drag selection by zooming the window to the selected range.
+    let fs_series = Arc::clone(&series);
     let finalize_selection: Arc<dyn Fn()> = Arc::new(move || {
         dragging.set(false);
         let (Some(x1), Some(x2)) = (sel_start.get_untracked(), sel_end.get_untracked()) else {
@@ -129,10 +154,10 @@ pub fn Chart(series: Vec<Series>) -> impl IntoView {
         }
         let s = start.get_untracked();
         let e = end.get_untracked();
-        let t1 = ((x1 - PAD_L) / (W - PAD_L - PAD_R)).clamp(0.0, 1.0);
-        let t2 = ((x2 - PAD_L) / (W - PAD_L - PAD_R)).clamp(0.0, 1.0);
-        let i1 = (s as f64 + t1 * (e - s) as f64).round() as usize;
-        let i2 = (s as f64 + t2 * (e - s) as f64).round() as usize;
+        let (lo, hi) = y_range(&fs_series, s, e);
+        let pad_l = pad_l_for(lo, hi);
+        let i1 = index_at_x(x1, s, e, pad_l);
+        let i2 = index_at_x(x2, s, e, pad_l);
         let (lo, hi) = (i1.min(i2), i1.max(i2));
         if hi > lo {
             start.set(lo);
@@ -141,6 +166,7 @@ pub fn Chart(series: Vec<Series>) -> impl IntoView {
         }
     });
 
+    let mm_series = Arc::clone(&series);
     let on_mousemove = move |ev: leptos::ev::MouseEvent| {
         if dragging.get() {
             if let Some(x) = viewbox_x(ev.client_x() as f64, ev.current_target().as_ref()) {
@@ -149,9 +175,9 @@ pub fn Chart(series: Vec<Series>) -> impl IntoView {
         } else if let Some(x) = viewbox_x(ev.client_x() as f64, ev.current_target().as_ref()) {
             let s = start.get();
             let e = end.get();
-            let t = ((x - PAD_L) / (W - PAD_L - PAD_R)).clamp(0.0, 1.0);
-            let i = (s as f64 + t * (e - s) as f64).round() as usize;
-            hover.set(Some(i.min(e)));
+            let (lo, hi) = y_range(&mm_series, s, e);
+            let pad_l = pad_l_for(lo, hi);
+            hover.set(Some(index_at_x(x, s, e, pad_l)));
         }
     };
 
@@ -168,12 +194,15 @@ pub fn Chart(series: Vec<Series>) -> impl IntoView {
         }
     };
 
+    let wheel_series = Arc::clone(&series);
     let on_wheel = move |ev: leptos::ev::WheelEvent| {
         let s = start.get();
         let e = end.get();
+        let (lo, hi) = y_range(&wheel_series, s, e);
+        let pad_l = pad_l_for(lo, hi);
         let x = viewbox_x(ev.client_x() as f64, ev.current_target().as_ref());
         let t = x
-            .map(|x| ((x - PAD_L) / (W - PAD_L - PAD_R)).clamp(0.0, 1.0))
+            .map(|x| ((x - pad_l) / (W - pad_l - PAD_R)).clamp(0.0, 1.0))
             .unwrap_or(0.5);
         let span = (e - s).max(2) as f64;
         let max = (count - 1).max(1) as f64;
@@ -223,10 +252,11 @@ pub fn Chart(series: Vec<Series>) -> impl IntoView {
     let paths = move || {
         let (s, e) = (start.get(), end.get());
         let (lo, hi) = y_range(&all_points, s, e);
+        let pad_l = pad_l_for(lo, hi);
         all_points
             .iter()
             .map(|ser| {
-                let d = path_d(&ser.points, s, e, lo, hi);
+                let d = path_d(&ser.points, s, e, lo, hi, pad_l);
                 view! {
                     <path d=d fill="none" stroke=ser.color stroke-width="2"/>
                 }
@@ -238,7 +268,7 @@ pub fn Chart(series: Vec<Series>) -> impl IntoView {
     let grid_path = move || {
         let (s, e) = (start.get(), end.get());
         let (lo, hi) = y_range(&grid_points, s, e);
-        grid_d(lo, hi)
+        grid_d(lo, hi, pad_l_for(lo, hi))
     };
 
     let x_points = Arc::clone(&series);
@@ -248,6 +278,8 @@ pub fn Chart(series: Vec<Series>) -> impl IntoView {
         let Some(points) = x_points.first().map(|ser| &ser.points) else {
             return Vec::new();
         };
+        let (lo, hi) = y_range(&x_points, s, e);
+        let pad_l = pad_l_for(lo, hi);
         (0..=4)
             .map(|k| {
                 let i = s + ((e - s) as f64 * k as f64 / 4.0) as usize;
@@ -260,7 +292,7 @@ pub fn Chart(series: Vec<Series>) -> impl IntoView {
                     "middle"
                 };
                 (
-                    x_pos(i, s, e),
+                    x_pos(i, s, e, pad_l),
                     points.get(i).map(|p| p.date.clone()).unwrap_or_default(),
                     anchor,
                 )
@@ -272,10 +304,11 @@ pub fn Chart(series: Vec<Series>) -> impl IntoView {
     let y_labels = move || {
         let (s, e) = (start.get(), end.get());
         let (lo, hi) = y_range(&y_points, s, e);
+        let pad_l = pad_l_for(lo, hi);
         (0..=4)
             .map(|k| {
                 let v = lo + (hi - lo) * k as f64 / 4.0;
-                (y_pos(v, lo, hi), v)
+                (y_pos(v, lo, hi), v, pad_l)
             })
             .collect::<Vec<_>>()
     };
@@ -284,6 +317,7 @@ pub fn Chart(series: Vec<Series>) -> impl IntoView {
     let markers = move || {
         let (s, e) = (start.get(), end.get());
         let (lo, hi) = y_range(&marker_points, s, e);
+        let pad_l = pad_l_for(lo, hi);
         marker_points
             .iter()
             .flat_map(|ser| {
@@ -292,7 +326,7 @@ pub fn Chart(series: Vec<Series>) -> impl IntoView {
                         return None;
                     }
                     let p = ser.points.get(marker.index)?;
-                    let x = x_pos(marker.index, s, e);
+                    let x = x_pos(marker.index, s, e, pad_l);
                     let y = y_pos(p.market_value, lo, hi);
                     let color = match marker.kind {
                         MarkerKind::Buy => "#d63a3a",
@@ -309,19 +343,18 @@ pub fn Chart(series: Vec<Series>) -> impl IntoView {
     let hover_series = Arc::clone(&series);
     let hover_line = move || {
         hover.get().map(|i| {
-            let x = x_pos(i, start.get(), end.get());
-            let y = {
-                let (s, e) = (start.get(), end.get());
-                let (lo, hi) = y_range(&hover_series, s, e);
-                hover_series
-                    .first()
-                    .and_then(|ser| ser.points.get(i))
-                    .map(|p| y_pos(p.market_value, lo, hi))
-                    .unwrap_or(PAD_T)
-            };
+            let (s, e) = (start.get(), end.get());
+            let (lo, hi) = y_range(&hover_series, s, e);
+            let pad_l = pad_l_for(lo, hi);
+            let x = x_pos(i, s, e, pad_l);
+            let y = hover_series
+                .first()
+                .and_then(|ser| ser.points.get(i))
+                .map(|p| y_pos(p.market_value, lo, hi))
+                .unwrap_or(PAD_T);
             view! {
                 <line x1=x x2=x y1=PAD_T y2={H-PAD_B} stroke="#666" stroke-width="1"/>
-                <line x1={PAD_L} x2={W-PAD_R} y1=y y2=y stroke="#666" stroke-width="1" stroke-dasharray="3,3"/>
+                <line x1={pad_l} x2={W-PAD_R} y1=y y2=y stroke="#666" stroke-width="1" stroke-dasharray="3,3"/>
             }
         })
     };
@@ -331,13 +364,14 @@ pub fn Chart(series: Vec<Series>) -> impl IntoView {
         hover.get().and_then(|i| {
             let (s, e) = (start.get(), end.get());
             let (lo, hi) = y_range(&hover_points, s, e);
+            let pad_l = pad_l_for(lo, hi);
             let primary = hover_points.first().and_then(|ser| ser.points.get(i))?;
-            let x = x_pos(i, s, e);
+            let x = x_pos(i, s, e, pad_l);
             let y = y_pos(primary.market_value, lo, hi);
             // X (date) label near the bottom of the vertical line.
             let (x_anchor, x_x) = if x > W - 40.0 {
                 ("end", x - 6.0)
-            } else if x < PAD_L + 40.0 {
+            } else if x < pad_l + 40.0 {
                 ("start", x + 6.0)
             } else {
                 ("middle", x)
@@ -350,7 +384,7 @@ pub fn Chart(series: Vec<Series>) -> impl IntoView {
             // Y (value) label to the left of the horizontal line.
             let y_y = if y < PAD_T + 14.0 { y + 14.0 } else { y - 8.0 };
             let y_label = view! {
-                <text x={PAD_L-8.0} y=y_y class="crosshair" text-anchor="end">
+                <text x={pad_l-8.0} y=y_y class="crosshair" text-anchor="end">
                     {format!("{:.4}", primary.market_value)}
                 </text>
             };
@@ -362,16 +396,37 @@ pub fn Chart(series: Vec<Series>) -> impl IntoView {
         })
     };
 
+    let sel_series = Arc::clone(&series);
     let sel_rect = move || {
         let (Some(a), Some(b)) = (sel_start.get(), sel_end.get()) else {
             return None;
         };
+        let (s, e) = (start.get(), end.get());
+        let (lo, hi) = y_range(&sel_series, s, e);
+        let pad_l = pad_l_for(lo, hi);
         let (x1, x2) = if a <= b { (a, b) } else { (b, a) };
-        let x1 = x1.clamp(PAD_L, W - PAD_R);
-        let x2 = x2.clamp(PAD_L, W - PAD_R);
+        let x1 = x1.clamp(pad_l, W - PAD_R);
+        let x2 = x2.clamp(pad_l, W - PAD_R);
         if x2 - x1 < 0.5 {
             return None;
         }
+        let points = sel_series.first().map(|ser| &ser.points)?;
+        let i1 = index_at_x(x1, s, e, pad_l);
+        let i2 = index_at_x(x2, s, e, pad_l);
+        let d1 = points.get(i1).map(|p| p.date.clone()).unwrap_or_default();
+        let d2 = points.get(i2).map(|p| p.date.clone()).unwrap_or_default();
+        let label = |x: f64, text: String| {
+            let (anchor, xx) = if x > W - 40.0 {
+                ("end", x - 6.0)
+            } else if x < pad_l + 40.0 {
+                ("start", x + 6.0)
+            } else {
+                ("middle", x)
+            };
+            view! {
+                <text x=xx y={H-PAD_B+14.0} class="crosshair" text-anchor=anchor>{text}</text>
+            }
+        };
         Some(view! {
             <rect
                 x=x1
@@ -381,6 +436,8 @@ pub fn Chart(series: Vec<Series>) -> impl IntoView {
                 fill="#888"
                 opacity="0.25"
             />
+            {label(x1, d1)}
+            {label(x2, d2)}
         })
     };
 
@@ -390,7 +447,8 @@ pub fn Chart(series: Vec<Series>) -> impl IntoView {
     };
 
     view! {
-        <div>
+        <div class="chart">
+            {(!title.is_empty()).then(|| view! { <h4 class="chart-title">{title.clone()}</h4> })}
             <div
                 style="position:relative"
                 on:mouseenter=on_enter
@@ -410,9 +468,23 @@ pub fn Chart(series: Vec<Series>) -> impl IntoView {
                     {move || x_labels().into_iter().map(|(x, label, anchor)| view! {
                         <text x=x y={H-12.0} class="axis" text-anchor=anchor>{label}</text>
                     }).collect_view()}
-                    {move || y_labels().into_iter().map(|(y, v)| view! {
-                        <text x={PAD_L-8.0} y=y class="axis" text-anchor="end">{format!("{v:.4}")}</text>
+                    {move || y_labels().into_iter().map(|(y, v, pad_l)| view! {
+                        <text x={pad_l-8.0} y=y class="axis" text-anchor="end">{format!("{v:.4}")}</text>
                     }).collect_view()}
+                    {move || if !x_label.is_empty() {
+                        view! { <text x={W/2.0} y={H-2.0} class="axis" text-anchor="middle">{x_label.clone()}</text> }.into_any()
+                    } else { ().into_any() }}
+                    {move || if !y_label.is_empty() {
+                        view! {
+                            <text
+                                transform=format!("rotate(-90 {left} {cy})", left=PAD_T, cy=H/2.0)
+                                x={PAD_T}
+                                y={H/2.0}
+                                class="axis"
+                                text-anchor="middle"
+                            >{y_label.clone()}</text>
+                        }.into_any()
+                    } else { ().into_any() }}
                     {paths}
                     {markers}
                     {sel_rect}
