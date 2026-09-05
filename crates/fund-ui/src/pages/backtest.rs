@@ -34,6 +34,7 @@ pub fn BacktestPage() -> impl IntoView {
     });
 
     let report = RwSignal::new(None::<BacktestReport>);
+    let error = RwSignal::new(None::<String>);
     let running = RwSignal::new(false);
 
     let on_fund_change = move |e: leptos::ev::Event| {
@@ -77,12 +78,14 @@ pub fn BacktestPage() -> impl IntoView {
             to,
         };
         running.set(true);
+        error.set(None);
         let future = api::run_backtest(input);
         spawn_local(async move {
             match future.await {
                 Ok(r) => report.set(Some(r)),
                 Err(e) => {
                     leptos::logging::error!("backtest failed: {e}");
+                    error.set(Some(e));
                 }
             }
             running.set(false);
@@ -164,6 +167,9 @@ pub fn BacktestPage() -> impl IntoView {
                 {move || if running.get() { "Running..." } else { "Run" }}
             </button>
         </form>
+        {move || error.get().map(|err| view! {
+            <p class="error">{err}</p>
+        })}
 
         <div>
             {move || {
@@ -180,6 +186,11 @@ pub fn BacktestPage() -> impl IntoView {
                             )}
                         </pre>
                         <Chart
+                            title="NAV".to_string()
+                            y_label="NAV".to_string()
+                            series=build_nav_series(&report)
+                        />
+                        <Chart
                             title="Equity curve".to_string()
                             y_label="Value".to_string()
                             series=vec![Series {
@@ -191,28 +202,12 @@ pub fn BacktestPage() -> impl IntoView {
                             }]
                         />
                         <Chart
-                            title="NAV".to_string()
-                            y_label="NAV".to_string()
-                            series=build_nav_series(&report)
-                        />
-                        <Chart
                             title="Cumulative return".to_string()
                             y_label="%".to_string()
                             series=vec![Series {
                                 points: report.return_curve.clone(),
                                 color: "#38a169",
                                 name: "return",
-                                decimals: 2,
-                                markers: vec![],
-                            }]
-                        />
-                        <Chart
-                            title="Drawdown".to_string()
-                            y_label="%".to_string()
-                            series=vec![Series {
-                                points: report.drawdown_curve.clone(),
-                                color: "#d63a3a",
-                                name: "drawdown",
                                 decimals: 2,
                                 markers: vec![],
                             }]
@@ -236,6 +231,17 @@ pub fn BacktestPage() -> impl IntoView {
                                     markers: vec![],
                                 },
                             ]
+                        />
+                        <Chart
+                            title="Drawdown".to_string()
+                            y_label="%".to_string()
+                            series=vec![Series {
+                                points: report.drawdown_curve.clone(),
+                                color: "#d63a3a",
+                                name: "drawdown",
+                                decimals: 2,
+                                markers: vec![],
+                            }]
                         />
                     </section>
                 })

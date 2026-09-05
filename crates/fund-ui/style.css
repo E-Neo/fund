@@ -93,13 +93,13 @@ button {
     fill: #222;
 }
 
-.hint {
-    color: #666;
-    font-size: 0.8rem;
-}
-
 .fetch-row {
     margin: 0.75rem 0;
+}
+
+.error {
+    color: #c53030;
+    font-weight: 600;
 }
 
 .fetch-row input,

@@ -7,6 +7,7 @@ const H: f64 = 320.0;
 const PAD_R: f64 = 20.0;
 const PAD_T: f64 = 36.0;
 const PAD_B: f64 = 48.0;
+const Y_LABEL_X: f64 = 14.0;
 
 /// A line to draw on the chart.
 #[derive(Debug, Clone)]
@@ -45,7 +46,7 @@ fn max_decimals(series: &[Series]) -> u32 {
 
 /// Width of the widest y-label for the range, used as the left padding.
 fn pad_l_for(lo: f64, hi: f64, decimals: u32) -> f64 {
-    let mut max: f64 = 34.0;
+    let mut max: f64 = 40.0;
     for k in 0..=4 {
         let v = lo + (hi - lo) * k as f64 / 4.0;
         let text = fmt_val(v, decimals);
@@ -74,14 +75,11 @@ fn y_pos(v: f64, lo: f64, hi: f64) -> f64 {
 fn y_range(series: &[Series], s: usize, e: usize) -> (f64, f64) {
     let mut lo = f64::INFINITY;
     let mut hi = f64::NEG_INFINITY;
-    for point in series
-        .iter()
-        .flat_map(|ser| ser.points.iter())
-        .take(e + 1)
-        .skip(s)
-    {
-        lo = lo.min(point.market_value);
-        hi = hi.max(point.market_value);
+    for ser in series {
+        for point in &ser.points[s..=e] {
+            lo = lo.min(point.market_value);
+            hi = hi.max(point.market_value);
+        }
     }
     if !lo.is_finite() || (hi - lo).abs() < f64::EPSILON {
         return (0.0, 1.0);
@@ -133,6 +131,11 @@ fn viewbox_xy(
     ))
 }
 
+/// True when the viewBox position lies inside the plot grid.
+fn in_grid(x: f64, y: f64, pad_l: f64) -> bool {
+    (pad_l..=W - PAD_R).contains(&x) && (PAD_T..=H - PAD_B).contains(&y)
+}
+
 #[component]
 pub fn Chart(
     series: Vec<Series>,
@@ -151,8 +154,6 @@ pub fn Chart(
     // Hovered index + the series nearest the cursor.
     let hover = RwSignal::new(None::<usize>);
     let hover_series = RwSignal::new(0usize);
-    // Pointer inside the figure.
-    let hovering = RwSignal::new(false);
     // Range-selection drag state (data indices).
     let dragging = RwSignal::new(false);
     let sel_start_i = RwSignal::new(None::<usize>);
@@ -190,6 +191,10 @@ pub fn Chart(
         let e = end.get();
         let (lo, hi) = y_range(&mm_series, s, e);
         let pad_l = pad_l_for(lo, hi, max_decimals(&mm_series));
+        if !in_grid(x, y, pad_l) {
+            hover.set(None);
+            return;
+        }
         let i = index_at_x(x, s, e, pad_l);
         if dragging.get() {
             sel_end_i.set(Some(i));
@@ -211,13 +216,8 @@ pub fn Chart(
         hover.set(Some(i));
     };
 
-    let on_enter = move |_| {
-        hovering.set(true);
-    };
-
     let finalize_leave = Arc::clone(&finalize_selection);
     let on_leave = move |_| {
-        hovering.set(false);
         hover.set(None);
         if dragging.get_untracked() {
             finalize_leave();
@@ -230,14 +230,17 @@ pub fn Chart(
         let e = end.get();
         let (lo, hi) = y_range(&wheel_series, s, e);
         let pad_l = pad_l_for(lo, hi, max_decimals(&wheel_series));
-        let xy = viewbox_xy(
+        let Some((x, y)) = viewbox_xy(
             ev.client_x() as f64,
             ev.client_y() as f64,
             ev.current_target().as_ref(),
-        );
-        let t = xy
-            .map(|(x, _)| ((x - pad_l) / (W - pad_l - PAD_R)).clamp(0.0, 1.0))
-            .unwrap_or(0.5);
+        ) else {
+            return;
+        };
+        if !in_grid(x, y, pad_l) {
+            return;
+        }
+        let t = ((x - pad_l) / (W - pad_l - PAD_R)).clamp(0.0, 1.0);
         let span = (e - s).max(2) as f64;
         let max = (count - 1).max(1) as f64;
         let min_span = 2.0;
@@ -259,7 +262,7 @@ pub fn Chart(
 
     let md_series = Arc::clone(&series);
     let on_mousedown = move |ev: leptos::ev::MouseEvent| {
-        let Some((x, _)) = viewbox_xy(
+        let Some((x, y)) = viewbox_xy(
             ev.client_x() as f64,
             ev.client_y() as f64,
             ev.current_target().as_ref(),
@@ -270,6 +273,9 @@ pub fn Chart(
         let e = end.get();
         let (lo, hi) = y_range(&md_series, s, e);
         let pad_l = pad_l_for(lo, hi, max_decimals(&md_series));
+        if !in_grid(x, y, pad_l) {
+            return;
+        }
         let i = index_at_x(x, s, e, pad_l);
         hover.set(None);
         dragging.set(true);
@@ -516,16 +522,12 @@ pub fn Chart(
         })
     };
 
-    let show_reset = move || {
-        let zoomed = start.get() > 0 || end.get() < count.saturating_sub(1).max(1);
-        hovering.get() || zoomed
-    };
+    let show_reset = move || start.get() > 0 || end.get() < count.saturating_sub(1).max(1);
 
     view! {
         <div class="chart">
             <div
                 style="position:relative"
-                on:mouseenter=on_enter
                 on:mouseleave=on_leave
             >
                 <svg
@@ -555,8 +557,8 @@ pub fn Chart(
                     {move || if !y_label.is_empty() {
                         view! {
                             <text
-                                transform=format!("rotate(-90 {left} {cy})", left=PAD_T, cy=H/2.0)
-                                x={PAD_T}
+                                transform=format!("rotate(-90 {left} {cy})", left=Y_LABEL_X, cy=H/2.0)
+                                x={Y_LABEL_X}
                                 y={H/2.0}
                                 class="axis"
                                 text-anchor="middle"
@@ -577,7 +579,6 @@ pub fn Chart(
                     ().into_any()
                 }}
             </div>
-            <p class="hint">"Scroll to zoom, drag to select a range, hover for values."</p>
         </div>
     }
 }
