@@ -3,10 +3,10 @@ use leptos::prelude::*;
 use std::sync::Arc;
 
 const W: f64 = 800.0;
-const H: f64 = 300.0;
+const H: f64 = 320.0;
 const PAD_R: f64 = 20.0;
-const PAD_T: f64 = 20.0;
-const PAD_B: f64 = 40.0;
+const PAD_T: f64 = 36.0;
+const PAD_B: f64 = 48.0;
 
 /// A line to draw on the chart.
 #[derive(Debug, Clone)]
@@ -14,6 +14,8 @@ pub struct Series {
     pub points: Vec<CurvePoint>,
     pub color: &'static str,
     pub name: &'static str,
+    /// Decimal places used for axis and crosshair labels.
+    pub decimals: u32,
     /// Indices into `points` to mark (buy/sell), optional.
     pub markers: Vec<ChartMarker>,
 }
@@ -31,13 +33,23 @@ pub enum MarkerKind {
     Sell,
 }
 
-/// Width of the widest `{:.4}` y-label for the range, used as the left padding.
-fn pad_l_for(lo: f64, hi: f64) -> f64 {
-    let mut max: f64 = 16.0;
+/// Format a value with the series' decimal precision.
+fn fmt_val(v: f64, decimals: u32) -> String {
+    format!("{v:.decimals$}", decimals = decimals as usize)
+}
+
+/// The widest decimals among all series.
+fn max_decimals(series: &[Series]) -> u32 {
+    series.iter().map(|ser| ser.decimals).max().unwrap_or(2)
+}
+
+/// Width of the widest y-label for the range, used as the left padding.
+fn pad_l_for(lo: f64, hi: f64, decimals: u32) -> f64 {
+    let mut max: f64 = 34.0;
     for k in 0..=4 {
         let v = lo + (hi - lo) * k as f64 / 4.0;
-        let text = format!("{v:.4}");
-        max = max.max(text.len() as f64 * 7.0 + 8.0);
+        let text = fmt_val(v, decimals);
+        max = max.max(text.len() as f64 * 7.0 + 10.0);
     }
     max
 }
@@ -102,16 +114,23 @@ fn grid_d(lo: f64, hi: f64, pad_l: f64) -> String {
     d
 }
 
-/// Map a mouse client x to viewBox units using the element's bounding rect.
-fn viewbox_x(client_x: f64, target: Option<&web_sys::EventTarget>) -> Option<f64> {
+/// Map a mouse client position to viewBox units using the element's bounding rect.
+fn viewbox_xy(
+    client_x: f64,
+    client_y: f64,
+    target: Option<&web_sys::EventTarget>,
+) -> Option<(f64, f64)> {
     use wasm_bindgen::JsCast;
     let rect = target?
         .dyn_ref::<web_sys::Element>()?
         .get_bounding_client_rect();
-    if rect.width() <= 0.0 {
+    if rect.width() <= 0.0 || rect.height() <= 0.0 {
         return None;
     }
-    Some((client_x - rect.left()) * W / rect.width())
+    Some((
+        (client_x - rect.left()) * W / rect.width(),
+        (client_y - rect.top()) * H / rect.height(),
+    ))
 }
 
 #[component]
@@ -129,56 +148,67 @@ pub fn Chart(
     // Visible index window.
     let start = RwSignal::new(0usize);
     let end = RwSignal::new(count.saturating_sub(1).max(1));
-    // Hovered index.
+    // Hovered index + the series nearest the cursor.
     let hover = RwSignal::new(None::<usize>);
+    let hover_series = RwSignal::new(0usize);
     // Pointer inside the figure.
     let hovering = RwSignal::new(false);
-    // Range-selection drag state (viewBox x units).
+    // Range-selection drag state (data indices).
     let dragging = RwSignal::new(false);
-    let sel_start = RwSignal::new(None::<f64>);
-    let sel_end = RwSignal::new(None::<f64>);
+    let sel_start_i = RwSignal::new(None::<usize>);
+    let sel_end_i = RwSignal::new(None::<usize>);
     // A y-domain refresh key, bumped on zoom so the signal updates.
     let zoom_key = RwSignal::new(0u32);
 
     // Complete a drag selection by zooming the window to the selected range.
-    let fs_series = Arc::clone(&series);
     let finalize_selection: Arc<dyn Fn()> = Arc::new(move || {
         dragging.set(false);
-        let (Some(x1), Some(x2)) = (sel_start.get_untracked(), sel_end.get_untracked()) else {
+        let (Some(a), Some(b)) = (sel_start_i.get_untracked(), sel_end_i.get_untracked()) else {
             return;
         };
-        sel_start.set(None);
-        sel_end.set(None);
-        if (x2 - x1).abs() < 6.0 {
+        sel_start_i.set(None);
+        sel_end_i.set(None);
+        let (lo, hi) = (a.min(b), a.max(b));
+        if hi - lo < 1 {
             return;
         }
-        let s = start.get_untracked();
-        let e = end.get_untracked();
-        let (lo, hi) = y_range(&fs_series, s, e);
-        let pad_l = pad_l_for(lo, hi);
-        let i1 = index_at_x(x1, s, e, pad_l);
-        let i2 = index_at_x(x2, s, e, pad_l);
-        let (lo, hi) = (i1.min(i2), i1.max(i2));
-        if hi > lo {
-            start.set(lo);
-            end.set(hi);
-            zoom_key.update(|k| *k += 1);
-        }
+        start.set(lo);
+        end.set(hi);
+        zoom_key.update(|k| *k += 1);
     });
 
     let mm_series = Arc::clone(&series);
     let on_mousemove = move |ev: leptos::ev::MouseEvent| {
+        let Some((x, y)) = viewbox_xy(
+            ev.client_x() as f64,
+            ev.client_y() as f64,
+            ev.current_target().as_ref(),
+        ) else {
+            return;
+        };
+        let s = start.get();
+        let e = end.get();
+        let (lo, hi) = y_range(&mm_series, s, e);
+        let pad_l = pad_l_for(lo, hi, max_decimals(&mm_series));
+        let i = index_at_x(x, s, e, pad_l);
         if dragging.get() {
-            if let Some(x) = viewbox_x(ev.client_x() as f64, ev.current_target().as_ref()) {
-                sel_end.set(Some(x));
-            }
-        } else if let Some(x) = viewbox_x(ev.client_x() as f64, ev.current_target().as_ref()) {
-            let s = start.get();
-            let e = end.get();
-            let (lo, hi) = y_range(&mm_series, s, e);
-            let pad_l = pad_l_for(lo, hi);
-            hover.set(Some(index_at_x(x, s, e, pad_l)));
+            sel_end_i.set(Some(i));
+            return;
         }
+        // Choose the series whose y at this index is closest to the cursor.
+        let mut best: Option<(usize, f64)> = None;
+        for (k, ser) in mm_series.iter().enumerate() {
+            if let Some(p) = ser.points.get(i) {
+                let dy = (y_pos(p.market_value, lo, hi) - y).abs();
+                if best.is_none_or(|(_, bd)| dy < bd) {
+                    best = Some((k, dy));
+                }
+            }
+        }
+        if let Some((k, _)) = best {
+            hover_series.set(k);
+        }
+        hover.set(Some(i));
     };
 
     let on_enter = move |_| {
@@ -199,10 +229,14 @@ pub fn Chart(
         let s = start.get();
         let e = end.get();
         let (lo, hi) = y_range(&wheel_series, s, e);
-        let pad_l = pad_l_for(lo, hi);
-        let x = viewbox_x(ev.client_x() as f64, ev.current_target().as_ref());
-        let t = x
-            .map(|x| ((x - pad_l) / (W - pad_l - PAD_R)).clamp(0.0, 1.0))
+        let pad_l = pad_l_for(lo, hi, max_decimals(&wheel_series));
+        let xy = viewbox_xy(
+            ev.client_x() as f64,
+            ev.client_y() as f64,
+            ev.current_target().as_ref(),
+        );
+        let t = xy
+            .map(|(x, _)| ((x - pad_l) / (W - pad_l - PAD_R)).clamp(0.0, 1.0))
             .unwrap_or(0.5);
         let span = (e - s).max(2) as f64;
         let max = (count - 1).max(1) as f64;
@@ -223,12 +257,24 @@ pub fn Chart(
         ev.prevent_default();
     };
 
+    let md_series = Arc::clone(&series);
     let on_mousedown = move |ev: leptos::ev::MouseEvent| {
-        if let Some(x) = viewbox_x(ev.client_x() as f64, ev.current_target().as_ref()) {
-            dragging.set(true);
-            sel_start.set(Some(x));
-            sel_end.set(Some(x));
-        }
+        let Some((x, _)) = viewbox_xy(
+            ev.client_x() as f64,
+            ev.client_y() as f64,
+            ev.current_target().as_ref(),
+        ) else {
+            return;
+        };
+        let s = start.get();
+        let e = end.get();
+        let (lo, hi) = y_range(&md_series, s, e);
+        let pad_l = pad_l_for(lo, hi, max_decimals(&md_series));
+        let i = index_at_x(x, s, e, pad_l);
+        hover.set(None);
+        dragging.set(true);
+        sel_start_i.set(Some(i));
+        sel_end_i.set(Some(i));
         ev.prevent_default();
     };
 
@@ -244,15 +290,15 @@ pub fn Chart(
         end.set(count.saturating_sub(1).max(1));
         zoom_key.update(|k| *k += 1);
         hover.set(None);
-        sel_start.set(None);
-        sel_end.set(None);
+        sel_start_i.set(None);
+        sel_end_i.set(None);
     };
 
     let all_points = Arc::clone(&series);
     let paths = move || {
         let (s, e) = (start.get(), end.get());
         let (lo, hi) = y_range(&all_points, s, e);
-        let pad_l = pad_l_for(lo, hi);
+        let pad_l = pad_l_for(lo, hi, max_decimals(&all_points));
         all_points
             .iter()
             .map(|ser| {
@@ -268,7 +314,7 @@ pub fn Chart(
     let grid_path = move || {
         let (s, e) = (start.get(), end.get());
         let (lo, hi) = y_range(&grid_points, s, e);
-        grid_d(lo, hi, pad_l_for(lo, hi))
+        grid_d(lo, hi, pad_l_for(lo, hi, max_decimals(&grid_points)))
     };
 
     let x_points = Arc::clone(&series);
@@ -279,7 +325,7 @@ pub fn Chart(
             return Vec::new();
         };
         let (lo, hi) = y_range(&x_points, s, e);
-        let pad_l = pad_l_for(lo, hi);
+        let pad_l = pad_l_for(lo, hi, max_decimals(&x_points));
         (0..=4)
             .map(|k| {
                 let i = s + ((e - s) as f64 * k as f64 / 4.0) as usize;
@@ -304,11 +350,12 @@ pub fn Chart(
     let y_labels = move || {
         let (s, e) = (start.get(), end.get());
         let (lo, hi) = y_range(&y_points, s, e);
-        let pad_l = pad_l_for(lo, hi);
+        let decimals = max_decimals(&y_points);
+        let pad_l = pad_l_for(lo, hi, decimals);
         (0..=4)
             .map(|k| {
                 let v = lo + (hi - lo) * k as f64 / 4.0;
-                (y_pos(v, lo, hi), v, pad_l)
+                (y_pos(v, lo, hi), v, pad_l, decimals)
             })
             .collect::<Vec<_>>()
     };
@@ -317,7 +364,7 @@ pub fn Chart(
     let markers = move || {
         let (s, e) = (start.get(), end.get());
         let (lo, hi) = y_range(&marker_points, s, e);
-        let pad_l = pad_l_for(lo, hi);
+        let pad_l = pad_l_for(lo, hi, max_decimals(&marker_points));
         marker_points
             .iter()
             .flat_map(|ser| {
@@ -340,15 +387,35 @@ pub fn Chart(
             .collect_view()
     };
 
-    let hover_series = Arc::clone(&series);
+    let legend_series = Arc::clone(&series);
+    let legend = move || {
+        let mut items = Vec::new();
+        let n = legend_series.len();
+        for (k, ser) in legend_series.iter().enumerate() {
+            let x = W - 8.0;
+            let y = 16.0 + k as f64 * 16.0;
+            items.push(view! {
+                <g class="legend">
+                    <rect x={x-80.0} y={y-9.0} width="9" height="9" fill=ser.color/>
+                    <text x={x-64.0} y=y class="axis" text-anchor="start">{ser.name}</text>
+                </g>
+            });
+        }
+        let _ = n;
+        items.collect_view()
+    };
+
+    let hover_series_clone = hover_series;
+    let hov_series = Arc::clone(&series);
     let hover_line = move || {
         hover.get().map(|i| {
             let (s, e) = (start.get(), end.get());
-            let (lo, hi) = y_range(&hover_series, s, e);
-            let pad_l = pad_l_for(lo, hi);
+            let (lo, hi) = y_range(&hov_series, s, e);
+            let pad_l = pad_l_for(lo, hi, max_decimals(&hov_series));
             let x = x_pos(i, s, e, pad_l);
-            let y = hover_series
-                .first()
+            let k = hover_series_clone.get().min(hov_series.len().saturating_sub(1));
+            let y = hov_series
+                .get(k)
                 .and_then(|ser| ser.points.get(i))
                 .map(|p| y_pos(p.market_value, lo, hi))
                 .unwrap_or(PAD_T);
@@ -359,13 +426,15 @@ pub fn Chart(
         })
     };
 
-    let hover_points = Arc::clone(&series);
+    let hov_points = Arc::clone(&series);
     let hover_labels = move || {
         hover.get().and_then(|i| {
             let (s, e) = (start.get(), end.get());
-            let (lo, hi) = y_range(&hover_points, s, e);
-            let pad_l = pad_l_for(lo, hi);
-            let primary = hover_points.first().and_then(|ser| ser.points.get(i))?;
+            let (lo, hi) = y_range(&hov_points, s, e);
+            let decimals = max_decimals(&hov_points);
+            let pad_l = pad_l_for(lo, hi, decimals);
+            let k = hover_series.get().min(hov_points.len().saturating_sub(1));
+            let primary = hov_points.get(k).and_then(|ser| ser.points.get(i))?;
             let x = x_pos(i, s, e, pad_l);
             let y = y_pos(primary.market_value, lo, hi);
             // X (date) label near the bottom of the vertical line.
@@ -381,11 +450,17 @@ pub fn Chart(
                     {primary.date.clone()}
                 </text>
             };
-            // Y (value) label to the left of the horizontal line.
+            // Y (value) label to the left of the horizontal line, using the hovered series' precision.
+            let pk = hover_series.get().min(hov_points.len().saturating_sub(1));
+            let pv = hov_points.get(pk).and_then(|ser| ser.points.get(i))?;
+            let pdec = hov_points
+                .get(pk)
+                .map(|ser| ser.decimals)
+                .unwrap_or(decimals);
             let y_y = if y < PAD_T + 14.0 { y + 14.0 } else { y - 8.0 };
             let y_label = view! {
                 <text x={pad_l-8.0} y=y_y class="crosshair" text-anchor="end">
-                    {format!("{:.4}", primary.market_value)}
+                    {fmt_val(pv.market_value, pdec)}
                 </text>
             };
             Some(view! {
@@ -396,23 +471,21 @@ pub fn Chart(
         })
     };
 
-    let sel_series = Arc::clone(&series);
+    let sel_points = Arc::clone(&series);
     let sel_rect = move || {
-        let (Some(a), Some(b)) = (sel_start.get(), sel_end.get()) else {
+        let (Some(a), Some(b)) = (sel_start_i.get(), sel_end_i.get()) else {
             return None;
         };
         let (s, e) = (start.get(), end.get());
-        let (lo, hi) = y_range(&sel_series, s, e);
-        let pad_l = pad_l_for(lo, hi);
-        let (x1, x2) = if a <= b { (a, b) } else { (b, a) };
-        let x1 = x1.clamp(pad_l, W - PAD_R);
-        let x2 = x2.clamp(pad_l, W - PAD_R);
-        if x2 - x1 < 0.5 {
+        let (lo, hi) = y_range(&sel_points, s, e);
+        let pad_l = pad_l_for(lo, hi, max_decimals(&sel_points));
+        let (i1, i2) = (a.min(b), a.max(b));
+        if i2 - i1 < 1 {
             return None;
         }
-        let points = sel_series.first().map(|ser| &ser.points)?;
-        let i1 = index_at_x(x1, s, e, pad_l);
-        let i2 = index_at_x(x2, s, e, pad_l);
+        let points = sel_points.first().map(|ser| &ser.points)?;
+        let x1 = x_pos(i1, s, e, pad_l);
+        let x2 = x_pos(i2, s, e, pad_l);
         let d1 = points.get(i1).map(|p| p.date.clone()).unwrap_or_default();
         let d2 = points.get(i2).map(|p| p.date.clone()).unwrap_or_default();
         let label = |x: f64, text: String| {
@@ -434,8 +507,10 @@ pub fn Chart(
                 width={x2-x1}
                 height={H-PAD_T-PAD_B}
                 fill="#888"
-                opacity="0.25"
+                opacity="0.30"
             />
+            <line x1=x1 x2=x1 y1=PAD_T y2={H-PAD_B} stroke="#666" stroke-width="1"/>
+            <line x1=x2 x2=x2 y1=PAD_T y2={H-PAD_B} stroke="#666" stroke-width="1"/>
             {label(x1, d1)}
             {label(x2, d2)}
         })
@@ -448,7 +523,6 @@ pub fn Chart(
 
     view! {
         <div class="chart">
-            {(!title.is_empty()).then(|| view! { <h4 class="chart-title">{title.clone()}</h4> })}
             <div
                 style="position:relative"
                 on:mouseenter=on_enter
@@ -462,17 +536,21 @@ pub fn Chart(
                     on:mousedown=on_mousedown
                     on:mouseup=on_mouseup
                 >
+                    {(!title.is_empty()).then(|| view! {
+                        <text x={W/2.0} y=18.0 class="chart-title" text-anchor="middle">{title.clone()}</text>
+                    })}
+                    {legend}
                     <g class="grid" stroke="#ddd">
                         <path d=grid_path fill="none"/>
                     </g>
                     {move || x_labels().into_iter().map(|(x, label, anchor)| view! {
-                        <text x=x y={H-12.0} class="axis" text-anchor=anchor>{label}</text>
+                        <text x=x y={H-16.0} class="axis" text-anchor=anchor>{label}</text>
                     }).collect_view()}
-                    {move || y_labels().into_iter().map(|(y, v, pad_l)| view! {
-                        <text x={pad_l-8.0} y=y class="axis" text-anchor="end">{format!("{v:.4}")}</text>
+                    {move || y_labels().into_iter().map(|(y, v, pad_l, decimals)| view! {
+                        <text x={pad_l-8.0} y=y class="axis" text-anchor="end">{fmt_val(v, decimals)}</text>
                     }).collect_view()}
                     {move || if !x_label.is_empty() {
-                        view! { <text x={W/2.0} y={H-2.0} class="axis" text-anchor="middle">{x_label.clone()}</text> }.into_any()
+                        view! { <text x={W/2.0} y={H-4.0} class="axis" text-anchor="middle">{x_label.clone()}</text> }.into_any()
                     } else { ().into_any() }}
                     {move || if !y_label.is_empty() {
                         view! {

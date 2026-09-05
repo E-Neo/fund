@@ -54,6 +54,7 @@ fn FundRow(fund: FundInfo, on_update: Arc<dyn Fn(String) + Send + Sync>) -> impl
                                         }).collect(),
                                         color: "#dd6b20",
                                         name: "nav",
+                                        decimals: 4,
                                         markers: vec![],
                                     }]
                                 />

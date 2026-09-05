@@ -186,20 +186,15 @@ pub fn BacktestPage() -> impl IntoView {
                                 points: report.curve.clone(),
                                 color: "#2b6cb0",
                                 name: "equity",
+                                decimals: 2,
                                 markers: vec![],
                             }]
                         />
-                    </section>
-                    <section>
-                        <h3>"NAV"</h3>
                         <Chart
                             title="NAV".to_string()
                             y_label="NAV".to_string()
                             series=build_nav_series(&report)
                         />
-                    </section>
-                    <section>
-                        <h3>"Cumulative return"</h3>
                         <Chart
                             title="Cumulative return".to_string()
                             y_label="%".to_string()
@@ -207,12 +202,10 @@ pub fn BacktestPage() -> impl IntoView {
                                 points: report.return_curve.clone(),
                                 color: "#38a169",
                                 name: "return",
+                                decimals: 2,
                                 markers: vec![],
                             }]
                         />
-                    </section>
-                    <section>
-                        <h3>"Drawdown"</h3>
                         <Chart
                             title="Drawdown".to_string()
                             y_label="%".to_string()
@@ -220,12 +213,10 @@ pub fn BacktestPage() -> impl IntoView {
                                 points: report.drawdown_curve.clone(),
                                 color: "#d63a3a",
                                 name: "drawdown",
+                                decimals: 2,
                                 markers: vec![],
                             }]
                         />
-                    </section>
-                    <section>
-                        <h3>"Invested vs Redeemed"</h3>
                         <Chart
                             title="Invested vs Redeemed".to_string()
                             y_label="Amount".to_string()
@@ -234,12 +225,14 @@ pub fn BacktestPage() -> impl IntoView {
                                     points: report.invested_curve.clone(),
                                     color: "#dd6b20",
                                     name: "invested",
+                                    decimals: 2,
                                     markers: vec![],
                                 },
                                 Series {
                                     points: report.redeemed_curve.clone(),
                                     color: "#2b6cb0",
                                     name: "redeemed",
+                                    decimals: 2,
                                     markers: vec![],
                                 },
                             ]
@@ -271,6 +264,7 @@ fn build_nav_series(report: &BacktestReport) -> Vec<Series> {
         points: report.nav_curve.clone(),
         color: "#dd6b20",
         name: "nav",
+        decimals: 4,
         markers,
     }]
 }
