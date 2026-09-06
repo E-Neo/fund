@@ -42,26 +42,28 @@ fn FundRow(fund: FundInfo, on_update: Arc<dyn Fn(String) + Send + Sync>) -> impl
             view! {
                 <tr>
                     <td colspan="3">
-                        {match navs.get() {
-                            Some(Ok(list)) => view! {
-                                <Chart
-                                    title=format!("NAV — {}", fund.name)
-                                    y_label="NAV".to_string()
-                                    series=vec![Series {
-                                        points: list.iter().map(|n| CurvePoint {
-                                            date: n.date.clone(),
-                                            market_value: n.unit_nav,
-                                        }).collect(),
-                                        color: "#dd6b20",
-                                        name: "nav",
-                                        decimals: 4,
-                                        markers: vec![],
-                                    }]
-                                />
-                            }.into_any(),
-                            Some(Err(err)) => view! { <p>{format!("Error: {err}")}</p> }.into_any(),
-                            None => view! { <p>"Loading..."</p> }.into_any(),
-                        }}
+                        <div class="table-scroll">
+                            {match navs.get() {
+                                Some(Ok(list)) => view! {
+                                    <Chart
+                                        title=format!("NAV — {}", fund.name)
+                                        y_label="NAV".to_string()
+                                        series=vec![Series {
+                                            points: list.iter().map(|n| CurvePoint {
+                                                date: n.date.clone(),
+                                                market_value: n.unit_nav,
+                                            }).collect(),
+                                            color: "#dd6b20",
+                                            name: "nav",
+                                            decimals: 4,
+                                            markers: vec![],
+                                        }]
+                                    />
+                                }.into_any(),
+                                Some(Err(err)) => view! { <p>{format!("Error: {err}")}</p> }.into_any(),
+                                None => view! { <p>"Loading..."</p> }.into_any(),
+                            }}
+                        </div>
                     </td>
                 </tr>
             }.into_any()
@@ -143,19 +145,21 @@ pub fn FundsPage() -> impl IntoView {
                 match funds.get() {
                     Some(Ok(list)) => {
                         view! {
-                            <table>
-                                <thead>
-                                    <tr><th>"Code"</th><th>"Name"</th><th></th></tr>
-                                </thead>
-                                <tbody>
-                                    {list.iter().map(|fund| {
-                                        let on_update = on_update.clone();
-                                        view! {
-                                            <FundRow fund={fund.clone()} on_update=on_update/>
-                                        }
-                                    }).collect_view()}
-                                </tbody>
-                            </table>
+                            <div class="table-scroll">
+                                <table>
+                                    <thead>
+                                        <tr><th>"Code"</th><th>"Name"</th><th></th></tr>
+                                    </thead>
+                                    <tbody>
+                                        {list.iter().map(|fund| {
+                                            let on_update = on_update.clone();
+                                            view! {
+                                                <FundRow fund={fund.clone()} on_update=on_update/>
+                                            }
+                                        }).collect_view()}
+                                    </tbody>
+                                </table>
+                            </div>
                         }
                         .into_any()
                     }

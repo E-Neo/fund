@@ -160,9 +160,12 @@ pub fn Chart(
     let sel_end_i = RwSignal::new(None::<usize>);
     // A y-domain refresh key, bumped on zoom so the signal updates.
     let zoom_key = RwSignal::new(0u32);
+    // Active pointers (id, viewBox x, y) for pinch-to-zoom.
+    let pointers = RwSignal::new(Vec::<(i32, f64, f64)>::new());
+    let pinch_dist = RwSignal::new(None::<f64>);
 
     // Complete a drag selection by zooming the window to the selected range.
-    let finalize_selection: Arc<dyn Fn()> = Arc::new(move || {
+    let finalize_selection: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
         dragging.set(false);
         let (Some(a), Some(b)) = (sel_start_i.get_untracked(), sel_end_i.get_untracked()) else {
             return;
@@ -178,8 +181,58 @@ pub fn Chart(
         zoom_key.update(|k| *k += 1);
     });
 
+    // Zoom the window toward a viewBox-x by a span factor (<1 zooms in).
+    let zs_series = Arc::clone(&series);
+    let zoom_at: Arc<dyn Fn(f64, f64) + Send + Sync> = Arc::new(move |x: f64, factor: f64| {
+        let s = start.get();
+        let e = end.get();
+        let (lo, hi) = y_range(&zs_series, s, e);
+        let pad_l = pad_l_for(lo, hi, max_decimals(&zs_series));
+        let t = ((x - pad_l) / (W - pad_l - PAD_R)).clamp(0.0, 1.0);
+        let span = (e - s).max(2) as f64;
+        let max = (count - 1).max(1) as f64;
+        let min_span = 2.0;
+        let new_span = (span * factor).clamp(min_span, max);
+        let mouse_index = s as f64 + t * (e - s) as f64;
+        let ns = (mouse_index - t * new_span).clamp(0.0, max - new_span);
+        let ne = ns + new_span;
+        start.set(ns.round() as usize);
+        end.set(ne.round() as usize);
+        zoom_key.update(|k| *k += 1);
+    });
+
+    fn pinch_pair(pointers: &[(i32, f64, f64)]) -> Option<((f64, f64), f64)> {
+        if pointers.len() != 2 {
+            return None;
+        }
+        let (_, x1, y1) = pointers[0];
+        let (_, x2, y2) = pointers[1];
+        let dist = ((x1 - x2).powi(2) + (y1 - y2).powi(2)).sqrt();
+        Some((((x1 + x2) / 2.0, (y1 + y2) / 2.0), dist))
+    }
+
+    fn capture_pointer(ev: &leptos::ev::PointerEvent) -> Option<web_sys::Element> {
+        use wasm_bindgen::JsCast;
+        let el = ev.current_target()?.dyn_into::<web_sys::Element>().ok()?;
+        let _ = el.set_pointer_capture(ev.pointer_id());
+        Some(el)
+    }
+
+    fn release_pointer(ev: &leptos::ev::PointerEvent) {
+        use wasm_bindgen::JsCast;
+        if let Some(el) = ev
+            .current_target()
+            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        {
+            let _ = el.release_pointer_capture(ev.pointer_id());
+        }
+    }
+
+    let drag_pointer = RwSignal::new(None::<i32>);
+
     let mm_series = Arc::clone(&series);
-    let on_mousemove = move |ev: leptos::ev::MouseEvent| {
+    let pinch_move_zoom = Arc::clone(&zoom_at);
+    let on_pointermove = move |ev: leptos::ev::PointerEvent| {
         let Some((x, y)) = viewbox_xy(
             ev.client_x() as f64,
             ev.client_y() as f64,
@@ -191,6 +244,32 @@ pub fn Chart(
         let e = end.get();
         let (lo, hi) = y_range(&mm_series, s, e);
         let pad_l = pad_l_for(lo, hi, max_decimals(&mm_series));
+
+        // Track the pointer for pinch gestures.
+        pointers.update(|ps| {
+            if let Some(p) = ps.iter_mut().find(|p| p.0 == ev.pointer_id()) {
+                p.1 = x;
+                p.2 = y;
+            }
+        });
+
+        // Two fingers active: pinch to zoom around the midpoint.
+        if let Some(((mx, _), dist)) = pinch_pair(&pointers.get_untracked()) {
+            if let Some(prev) = pinch_dist.get_untracked()
+                && prev > 0.0
+                && dist > 0.0
+            {
+                let factor = (prev / dist).clamp(0.2, 5.0);
+                pinch_move_zoom(mx, factor);
+            }
+            pinch_dist.set(Some(dist));
+            hover.set(None);
+            dragging.set(false);
+            sel_start_i.set(None);
+            sel_end_i.set(None);
+            return;
+        }
+
         if !in_grid(x, y, pad_l) {
             hover.set(None);
             return;
@@ -198,6 +277,11 @@ pub fn Chart(
         let i = index_at_x(x, s, e, pad_l);
         if dragging.get() {
             sel_end_i.set(Some(i));
+            return;
+        }
+        // Hover crosshair only for a mouse (touch uses drag/pinch).
+        if ev.pointer_type() != "mouse" {
+            hover.set(None);
             return;
         }
         // Choose the series whose y at this index is closest to the cursor.
@@ -226,10 +310,6 @@ pub fn Chart(
 
     let wheel_series = Arc::clone(&series);
     let on_wheel = move |ev: leptos::ev::WheelEvent| {
-        let s = start.get();
-        let e = end.get();
-        let (lo, hi) = y_range(&wheel_series, s, e);
-        let pad_l = pad_l_for(lo, hi, max_decimals(&wheel_series));
         let Some((x, y)) = viewbox_xy(
             ev.client_x() as f64,
             ev.client_y() as f64,
@@ -237,31 +317,22 @@ pub fn Chart(
         ) else {
             return;
         };
+        let s = start.get();
+        let e = end.get();
+        let (lo, hi) = y_range(&wheel_series, s, e);
+        let pad_l = pad_l_for(lo, hi, max_decimals(&wheel_series));
         if !in_grid(x, y, pad_l) {
             return;
         }
-        let t = ((x - pad_l) / (W - pad_l - PAD_R)).clamp(0.0, 1.0);
-        let span = (e - s).max(2) as f64;
-        let max = (count - 1).max(1) as f64;
-        let min_span = 2.0;
         // Scroll up zooms in, scroll down zooms out, centered on the mouse.
-        let new_span = if ev.delta_y() < 0.0 {
-            (span * 0.5).max(min_span)
-        } else {
-            (span * 2.0).min(max)
-        };
-        let mouse_index = s as f64 + t * (e - s) as f64;
-        let ns = (mouse_index - t * new_span).clamp(0.0, max - new_span);
-        let ne = ns + new_span;
-        start.set(ns.round() as usize);
-        end.set(ne.round() as usize);
-        zoom_key.update(|k| *k += 1);
+        let factor = if ev.delta_y() < 0.0 { 0.5 } else { 2.0 };
+        zoom_at(x, factor);
         hover.set(None);
         ev.prevent_default();
     };
 
     let md_series = Arc::clone(&series);
-    let on_mousedown = move |ev: leptos::ev::MouseEvent| {
+    let on_pointerdown = move |ev: leptos::ev::PointerEvent| {
         let Some((x, y)) = viewbox_xy(
             ev.client_x() as f64,
             ev.client_y() as f64,
@@ -273,23 +344,54 @@ pub fn Chart(
         let e = end.get();
         let (lo, hi) = y_range(&md_series, s, e);
         let pad_l = pad_l_for(lo, hi, max_decimals(&md_series));
+
+        pointers.update(|ps| ps.push((ev.pointer_id(), x, y)));
+
+        // Second finger starts a pinch.
+        if pointers.get_untracked().len() == 2 {
+            dragging.set(false);
+            drag_pointer.set(None);
+            sel_start_i.set(None);
+            sel_end_i.set(None);
+            hover.set(None);
+            if let Some((_, dist)) = pinch_pair(&pointers.get_untracked()) {
+                pinch_dist.set(Some(dist));
+            }
+            return;
+        }
+
         if !in_grid(x, y, pad_l) {
             return;
         }
         let i = index_at_x(x, s, e, pad_l);
         hover.set(None);
+        capture_pointer(&ev);
         dragging.set(true);
+        drag_pointer.set(Some(ev.pointer_id()));
         sel_start_i.set(Some(i));
         sel_end_i.set(Some(i));
         ev.prevent_default();
     };
 
     let finalize_up = Arc::clone(&finalize_selection);
-    let on_mouseup = move |_| {
-        if dragging.get_untracked() {
-            finalize_up();
-        }
-    };
+    let on_pointerup: Arc<dyn Fn(leptos::ev::PointerEvent) + Send + Sync> =
+        Arc::new(move |ev: leptos::ev::PointerEvent| {
+            let is_drag = drag_pointer.get_untracked() == Some(ev.pointer_id());
+            pointers.update(|ps| ps.retain(|p| p.0 != ev.pointer_id()));
+            release_pointer(&ev);
+            if pointers.get_untracked().len() < 2 {
+                pinch_dist.set(None);
+                drag_pointer.set(None);
+            }
+            if is_drag && dragging.get_untracked() {
+                finalize_up();
+            }
+        });
+
+    let on_up_arc = Arc::clone(&on_pointerup);
+    let on_cancel_arc = Arc::clone(&on_pointerup);
+    let on_pointerup_up = move |ev: leptos::ev::PointerEvent| on_up_arc(ev);
+    let on_pointerup_cancel = move |ev: leptos::ev::PointerEvent| on_cancel_arc(ev);
 
     let on_reset = move |_| {
         start.set(0);
@@ -528,15 +630,16 @@ pub fn Chart(
         <div class="chart">
             <div
                 style="position:relative"
-                on:mouseleave=on_leave
+                on:pointerleave=on_leave
             >
                 <svg
                     viewBox=format!("0 0 {W} {H}")
                     style="width:100%;height:auto;background:#fafafa;touch-action:none"
-                    on:mousemove=on_mousemove
+                    on:pointermove=on_pointermove
                     on:wheel=on_wheel
-                    on:mousedown=on_mousedown
-                    on:mouseup=on_mouseup
+                    on:pointerdown=on_pointerdown
+                    on:pointerup=on_pointerup_up
+                    on:pointercancel=on_pointerup_cancel
                 >
                     {(!title.is_empty()).then(|| view! {
                         <text x={W/2.0} y=18.0 class="chart-title" text-anchor="middle">{title.clone()}</text>

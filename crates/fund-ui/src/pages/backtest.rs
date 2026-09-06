@@ -185,64 +185,74 @@ pub fn BacktestPage() -> impl IntoView {
                                 report.total_return_pct, report.max_drawdown_pct,
                             )}
                         </pre>
-                        <Chart
-                            title="NAV".to_string()
-                            y_label="NAV".to_string()
-                            series=build_nav_series(&report)
-                        />
-                        <Chart
-                            title="Equity curve".to_string()
-                            y_label="Value".to_string()
-                            series=vec![Series {
-                                points: report.curve.clone(),
-                                color: "#2b6cb0",
-                                name: "equity",
-                                decimals: 2,
-                                markers: vec![],
-                            }]
-                        />
-                        <Chart
-                            title="Cumulative return".to_string()
-                            y_label="%".to_string()
-                            series=vec![Series {
-                                points: report.return_curve.clone(),
-                                color: "#38a169",
-                                name: "return",
-                                decimals: 2,
-                                markers: vec![],
-                            }]
-                        />
-                        <Chart
-                            title="Invested vs Redeemed".to_string()
-                            y_label="Amount".to_string()
-                            series=vec![
-                                Series {
-                                    points: report.invested_curve.clone(),
-                                    color: "#dd6b20",
-                                    name: "invested",
-                                    decimals: 2,
-                                    markers: vec![],
-                                },
-                                Series {
-                                    points: report.redeemed_curve.clone(),
+                        <div class="table-scroll">
+                            <Chart
+                                title="NAV".to_string()
+                                y_label="NAV".to_string()
+                                series=build_nav_series(&report)
+                            />
+                        </div>
+                        <div class="table-scroll">
+                            <Chart
+                                title="Equity curve".to_string()
+                                y_label="Value".to_string()
+                                series=vec![Series {
+                                    points: report.curve.clone(),
                                     color: "#2b6cb0",
-                                    name: "redeemed",
+                                    name: "equity",
                                     decimals: 2,
                                     markers: vec![],
-                                },
-                            ]
-                        />
-                        <Chart
-                            title="Drawdown".to_string()
-                            y_label="%".to_string()
-                            series=vec![Series {
-                                points: report.drawdown_curve.clone(),
-                                color: "#d63a3a",
-                                name: "drawdown",
-                                decimals: 2,
-                                markers: vec![],
-                            }]
-                        />
+                                }]
+                            />
+                        </div>
+                        <div class="table-scroll">
+                            <Chart
+                                title="Cumulative return".to_string()
+                                y_label="%".to_string()
+                                series=vec![Series {
+                                    points: report.return_curve.clone(),
+                                    color: "#38a169",
+                                    name: "return",
+                                    decimals: 2,
+                                    markers: vec![],
+                                }]
+                            />
+                        </div>
+                        <div class="table-scroll">
+                            <Chart
+                                title="Invested vs Redeemed".to_string()
+                                y_label="Amount".to_string()
+                                series=vec![
+                                    Series {
+                                        points: report.invested_curve.clone(),
+                                        color: "#dd6b20",
+                                        name: "invested",
+                                        decimals: 2,
+                                        markers: vec![],
+                                    },
+                                    Series {
+                                        points: report.redeemed_curve.clone(),
+                                        color: "#2b6cb0",
+                                        name: "redeemed",
+                                        decimals: 2,
+                                        markers: vec![],
+                                    },
+                                ]
+                            />
+                        </div>
+                        <div class="table-scroll">
+                            <Chart
+                                title="Drawdown".to_string()
+                                y_label="%".to_string()
+                                series=vec![Series {
+                                    points: report.drawdown_curve.clone(),
+                                    color: "#d63a3a",
+                                    name: "drawdown",
+                                    decimals: 2,
+                                    markers: vec![],
+                                }]
+                            />
+                        </div>
                     </section>
                 })
             }}

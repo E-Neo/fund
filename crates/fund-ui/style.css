@@ -15,19 +15,35 @@ body {
     padding: 1rem 1.5rem;
 }
 
-nav {
+.topnav {
     margin: 1rem 0;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.nav-toggle {
+    display: none;
+    margin: 0;
+    padding: 0.4rem 0.8rem;
+    font-size: 1.2rem;
+    line-height: 1;
+    min-height: 44px;
+    min-width: 44px;
+}
+
+.nav-links {
     display: flex;
     gap: 1rem;
 }
 
-nav a {
+.nav-links a {
     color: #2b6cb0;
     text-decoration: none;
     font-weight: 600;
 }
 
-nav a:hover {
+.nav-links a:hover {
     text-decoration: underline;
 }
 
@@ -106,4 +122,48 @@ button {
 .fetch-row select {
     max-width: 320px;
     margin-right: 0.5rem;
+}
+
+.table-scroll {
+    overflow-x: auto;
+}
+
+@media (max-width: 640px) {
+    .container {
+        padding: 0.5rem 0.75rem;
+    }
+
+    body {
+        font-size: 16px;
+    }
+
+    input,
+    select {
+        font-size: 16px;
+        max-width: 100%;
+    }
+
+    button {
+        min-height: 44px;
+        min-width: 44px;
+    }
+
+    .nav-toggle {
+        display: block;
+    }
+
+    .nav-links {
+        display: none;
+        flex-direction: column;
+        gap: 0.5rem;
+        width: 100%;
+    }
+
+    .nav-links.open {
+        display: flex;
+    }
+
+    .nav-links a {
+        padding: 0.6rem 0;
+    }
 }
