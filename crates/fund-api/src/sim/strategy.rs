@@ -31,19 +31,16 @@ pub trait Strategy {
 const FUND_STRATEGIES_WASM: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/fund_strategies.wasm"));
 
-pub fn load(
-    arg: &StrategyArg,
-    initial: f64,
-    dca_amount: f64,
-    dca_interval: u64,
-) -> Result<Box<dyn Strategy>> {
+pub fn load(arg: &StrategyArg, dca_amount: f64, dca_interval: u64) -> Result<Box<dyn Strategy>> {
     match arg {
         StrategyArg::Bundled(name) => {
             let config = match name.as_str() {
-                "buy_hold" => format!("strategy = \"buy_hold\"\namount = {initial}"),
-                "dca" => {
-                    format!("strategy = \"dca\"\namount = {dca_amount}\ninterval = {dca_interval}")
-                }
+                "dca" => serde_json::to_string(&serde_json::json!({
+                    "strategy": "dca",
+                    "amount": dca_amount,
+                    "interval": dca_interval,
+                }))
+                .map_err(|err| Error::Parse(format!("failed to serialize config: {err}")))?,
                 other => return Err(Error::UnknownStrategy(other.to_string())),
             };
             embedded(name, &config)
@@ -54,7 +51,7 @@ pub fn load(
 
 pub fn embedded(name: &str, config: &str) -> Result<Box<dyn Strategy>> {
     match name {
-        "buy_hold" | "dca" => Ok(Box::new(WasmStrategy::embedded(
+        "dca" => Ok(Box::new(WasmStrategy::embedded(
             FUND_STRATEGIES_WASM,
             name.to_string(),
             config,
@@ -65,12 +62,12 @@ pub fn embedded(name: &str, config: &str) -> Result<Box<dyn Strategy>> {
 
 fn load_plugin(path: &Path) -> Result<Box<dyn Strategy>> {
     let text = std::fs::read_to_string(path)?;
-    let parsed: toml::Table = toml::from_str(&text)
-        .map_err(|err| Error::Parse(format!("invalid strategy toml {}: {err}", path.display())))?;
+    let parsed: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|err| Error::Parse(format!("invalid strategy json {}: {err}", path.display())))?;
     let module = parsed
         .get("module")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| Error::Parse("missing `module` in strategy toml".to_string()))?;
+        .ok_or_else(|| Error::Parse("missing `module` in strategy json".to_string()))?;
     let module_path = path
         .parent()
         .map(|dir| dir.join(module))
@@ -78,8 +75,8 @@ fn load_plugin(path: &Path) -> Result<Box<dyn Strategy>> {
     let params = parsed
         .get("params")
         .cloned()
-        .unwrap_or_else(|| toml::Value::Table(toml::Table::new()));
-    let config = toml::to_string(&params)
+        .unwrap_or(serde_json::json!({}));
+    let config = serde_json::to_string(&params)
         .map_err(|err| Error::Parse(format!("failed to serialize params: {err}")))?;
     let name = path
         .file_stem()
@@ -88,6 +85,6 @@ fn load_plugin(path: &Path) -> Result<Box<dyn Strategy>> {
     WasmStrategy::from_file(&module_path, name, &config).map(|s| Box::new(s) as Box<dyn Strategy>)
 }
 
-pub fn names() -> [&'static str; 2] {
-    ["buy_hold", "dca"]
+pub fn names() -> [&'static str; 1] {
+    ["dca"]
 }

@@ -9,7 +9,7 @@ use leptos::task::spawn_local;
 #[component]
 pub fn BacktestPage() -> impl IntoView {
     let code = RwSignal::new(String::new());
-    let strategy = RwSignal::new(String::from("buy_hold"));
+    let strategy = RwSignal::new(String::from("dca"));
     let initial = RwSignal::new(1000.0f64);
     let dca_amount = RwSignal::new(100.0f64);
     let dca_interval = RwSignal::new(7u64);

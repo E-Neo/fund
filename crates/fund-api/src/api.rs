@@ -171,11 +171,7 @@ async fn list_strategies() -> Json<Vec<StrategyInfo>> {
             .iter()
             .map(|name| StrategyInfo {
                 name: (*name).to_string(),
-                description: match *name {
-                    "buy_hold" => "invest once and hold".to_string(),
-                    "dca" => "invest a fixed amount on a regular schedule".to_string(),
-                    _ => String::new(),
-                },
+                description: "invest a fixed amount on a regular schedule".to_string(),
             })
             .collect(),
     )
@@ -221,8 +217,8 @@ async fn run_backtest(Json(input): Json<BacktestInput>) -> Result<Json<BacktestR
     });
     let mut fee_rule = rules::Fifo::new(fee_rule.subscribe, fee_rule.redeem);
     let arg = StrategyArg::Bundled(input.strategy.clone());
-    let mut strategy = strategy::load(&arg, input.initial, input.dca_amount, input.dca_interval)
-        .map_err(api_err)?;
+    let mut strategy =
+        strategy::load(&arg, input.dca_amount, input.dca_interval).map_err(api_err)?;
     let result = engine_simulate(&navs, &mut fee_rule, strategy.as_mut()).map_err(api_err)?;
     let report = report::build(start, end, days, &result);
 

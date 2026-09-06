@@ -66,24 +66,22 @@ POST /api/backtest                   run a backtest (BacktestInput -> BacktestRe
 
 ## Strategies
 
-- `buy_hold`: invest an initial amount once and hold.
 - `dca`: invest a fixed amount on a regular schedule.
 
 Strategies are compiled to WebAssembly components and embedded into the
 binary. Bundled strategy sources live in `crates/fund-strategies/`, where the
-builtin `buy_hold` and `dca` strategies are selected via the `strategy` key in
-the params. A custom strategy is described by a TOML file pointing at a
-component:
+builtin `dca` strategy is selected via the `strategy` key in the config. A
+custom strategy is described by a JSON file pointing at a component:
 
-```toml
-module = "/path/to/my-strategy.wasm"
-
-[params]
-amount = 100.0
+```json
+{
+  "module": "/path/to/my-strategy.wasm",
+  "params": { "amount": 100.0 }
+}
 ```
 
 A strategy implements the interface in `wit/strategy.wit`: `init(config)` is
-called once with the serialized `[params]` table, then `on-event(event)` is
+called once with the serialized `params` as JSON, then `on-event(event)` is
 called for each `nav-update` and `order-executed` event and returns a list of
 orders. Strategies keep their own state (including their recorded holdings)
 inside the guest.
