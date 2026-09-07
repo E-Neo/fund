@@ -1,6 +1,7 @@
 use fund_types::CurvePoint;
 use leptos::prelude::*;
 use std::sync::Arc;
+use std::time::Duration;
 
 const W: f64 = 800.0;
 const H: f64 = 320.0;
@@ -8,6 +9,10 @@ const PAD_R: f64 = 20.0;
 const PAD_T: f64 = 36.0;
 const PAD_B: f64 = 48.0;
 const Y_LABEL_X: f64 = 14.0;
+/// Movement (viewBox px) allowed while holding before it stops being a hold.
+const HOLD_TOLERANCE: f64 = 15.0;
+/// How long a finger must hold still before a selection starts.
+const LONG_PRESS_MS: u64 = 400;
 
 /// A line to draw on the chart.
 #[derive(Debug, Clone)]
@@ -229,6 +234,13 @@ pub fn Chart(
     }
 
     let drag_pointer = RwSignal::new(None::<i32>);
+    // ViewBox position where the current press started; `Some` = still in
+    // crosshair mode (selection not yet committed by a long press).
+    let down_xy = RwSignal::new(None::<(f64, f64)>);
+    // True once a long press commits the gesture to a drag selection.
+    let selecting = RwSignal::new(false);
+    // Hold-timer handle that upgrades a hold to a selection.
+    let tap_timer = RwSignal::new(None::<leptos::prelude::TimeoutHandle>);
 
     let mm_series = Arc::clone(&series);
     let pinch_move_zoom = Arc::clone(&zoom_at);
@@ -276,15 +288,32 @@ pub fn Chart(
         }
         let i = index_at_x(x, s, e, pad_l);
         if dragging.get() {
-            sel_end_i.set(Some(i));
-            return;
-        }
-        // Hover crosshair only for a mouse (touch uses drag/pinch).
-        if ev.pointer_type() != "mouse" {
+            // A mouse drag selects immediately; touch waits for a long press.
+            if ev.pointer_type() == "mouse" {
+                selecting.set(true);
+                sel_end_i.set(Some(i));
+                hover.set(None);
+                return;
+            }
+            if selecting.get() {
+                sel_end_i.set(Some(i));
+                return;
+            }
+            // Touch: crosshair follows the finger; moving too far cancels a hold.
+            if let Some((sx, sy)) = down_xy.get_untracked() {
+                let moved = (x - sx).hypot(y - sy);
+                if moved > HOLD_TOLERANCE {
+                    if let Some(h) = tap_timer.get_untracked() {
+                        h.clear();
+                    }
+                    tap_timer.set(None);
+                }
+            }
+        } else if ev.pointer_type() != "mouse" {
             hover.set(None);
             return;
         }
-        // Choose the series whose y at this index is closest to the cursor.
+        // Hover / crosshair-follow: choose the series whose y is closest.
         let mut best: Option<(usize, f64)> = None;
         for (k, ser) in mm_series.iter().enumerate() {
             if let Some(p) = ser.points.get(i) {
@@ -303,6 +332,12 @@ pub fn Chart(
     let finalize_leave = Arc::clone(&finalize_selection);
     let on_leave = move |_| {
         hover.set(None);
+        down_xy.set(None);
+        selecting.set(false);
+        if let Some(h) = tap_timer.get_untracked() {
+            h.clear();
+        }
+        tap_timer.set(None);
         if dragging.get_untracked() {
             finalize_leave();
         }
@@ -351,9 +386,15 @@ pub fn Chart(
         if pointers.get_untracked().len() == 2 {
             dragging.set(false);
             drag_pointer.set(None);
+            selecting.set(false);
             sel_start_i.set(None);
             sel_end_i.set(None);
             hover.set(None);
+            down_xy.set(None);
+            if let Some(h) = tap_timer.get_untracked() {
+                h.clear();
+            }
+            tap_timer.set(None);
             if let Some((_, dist)) = pinch_pair(&pointers.get_untracked()) {
                 pinch_dist.set(Some(dist));
             }
@@ -364,12 +405,54 @@ pub fn Chart(
             return;
         }
         let i = index_at_x(x, s, e, pad_l);
-        hover.set(None);
+        // Show the crosshair immediately at the pressed point.
+        let mut best: Option<(usize, f64)> = None;
+        for (k, ser) in md_series.iter().enumerate() {
+            if let Some(p) = ser.points.get(i) {
+                let dy = (y_pos(p.market_value, lo, hi) - y).abs();
+                if best.is_none_or(|(_, bd)| dy < bd) {
+                    best = Some((k, dy));
+                }
+            }
+        }
+        if let Some((k, _)) = best {
+            hover_series.set(k);
+        }
+        hover.set(Some(i));
         capture_pointer(&ev);
         dragging.set(true);
         drag_pointer.set(Some(ev.pointer_id()));
         sel_start_i.set(Some(i));
         sel_end_i.set(Some(i));
+        selecting.set(false);
+        down_xy.set(Some((x, y)));
+        // A touch hold for LONG_PRESS_MS without much movement commits to a
+        // selection; quick moves keep the crosshair following the finger.
+        if ev.pointer_type() != "mouse" {
+            let tap_down_xy = down_xy;
+            let tap_pointer = drag_pointer;
+            let tap_selecting = selecting;
+            let tap_hover = hover;
+            let tap_pid = ev.pointer_id();
+            if let Ok(handle) = leptos::prelude::set_timeout_with_handle(
+                move || {
+                    if tap_down_xy.get_untracked().is_none()
+                        || tap_pointer.get_untracked() != Some(tap_pid)
+                    {
+                        return;
+                    }
+                    tap_selecting.set(true);
+                    tap_down_xy.set(None);
+                    tap_hover.set(None);
+                },
+                Duration::from_millis(LONG_PRESS_MS),
+            ) {
+                if let Some(prev) = tap_timer.get_untracked() {
+                    prev.clear();
+                }
+                tap_timer.set(Some(handle));
+            }
+        }
         ev.prevent_default();
     };
 
@@ -379,25 +462,62 @@ pub fn Chart(
             let is_drag = drag_pointer.get_untracked() == Some(ev.pointer_id());
             pointers.update(|ps| ps.retain(|p| p.0 != ev.pointer_id()));
             release_pointer(&ev);
+            if let Some(h) = tap_timer.get_untracked() {
+                h.clear();
+            }
+            tap_timer.set(None);
             if pointers.get_untracked().len() < 2 {
                 pinch_dist.set(None);
                 drag_pointer.set(None);
             }
-            if is_drag && dragging.get_untracked() {
-                finalize_up();
+            if !is_drag || !dragging.get_untracked() {
+                down_xy.set(None);
+                return;
             }
+            // A long press selected a range: zoom to it.
+            if selecting.get_untracked() {
+                down_xy.set(None);
+                finalize_up();
+                return;
+            }
+            // Quick tap / quick move: keep the crosshair, do not zoom.
+            down_xy.set(None);
+            dragging.set(false);
+            sel_start_i.set(None);
+            sel_end_i.set(None);
         });
 
     let on_up_arc = Arc::clone(&on_pointerup);
-    let on_cancel_arc = Arc::clone(&on_pointerup);
     let on_pointerup_up = move |ev: leptos::ev::PointerEvent| on_up_arc(ev);
-    let on_pointerup_cancel = move |ev: leptos::ev::PointerEvent| on_cancel_arc(ev);
+
+    // A cancelled pointer (e.g. the browser seizes the gesture) should clear
+    // state without showing a crosshair.
+    let on_pointercancel = move |ev: leptos::ev::PointerEvent| {
+        pointers.update(|ps| ps.retain(|p| p.0 != ev.pointer_id()));
+        release_pointer(&ev);
+        if let Some(h) = tap_timer.get_untracked() {
+            h.clear();
+        }
+        tap_timer.set(None);
+        down_xy.set(None);
+        selecting.set(false);
+        if pointers.get_untracked().len() < 2 {
+            pinch_dist.set(None);
+            drag_pointer.set(None);
+        }
+        hover.set(None);
+        dragging.set(false);
+        sel_start_i.set(None);
+        sel_end_i.set(None);
+    };
 
     let on_reset = move |_| {
         start.set(0);
         end.set(count.saturating_sub(1).max(1));
         zoom_key.update(|k| *k += 1);
         hover.set(None);
+        selecting.set(false);
+        down_xy.set(None);
         sel_start_i.set(None);
         sel_end_i.set(None);
     };
@@ -639,7 +759,7 @@ pub fn Chart(
                     on:wheel=on_wheel
                     on:pointerdown=on_pointerdown
                     on:pointerup=on_pointerup_up
-                    on:pointercancel=on_pointerup_cancel
+                    on:pointercancel=on_pointercancel
                 >
                     {(!title.is_empty()).then(|| view! {
                         <text x={W/2.0} y=18.0 class="chart-title" text-anchor="middle">{title.clone()}</text>
