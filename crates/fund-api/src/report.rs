@@ -20,7 +20,7 @@ pub fn build(start: NaiveDate, end: NaiveDate, days: usize, result: &SimulationR
     let snapshots = &result.snapshots;
     let last = snapshots.last().expect("at least one snapshot");
     let final_market_value = last.market_value();
-    let total_invested = last.cumulative_investment;
+    let total_invested = last.capital;
     let total_redeemed = last.cumulative_redemption;
     let profit = last.profit();
     let total_return_pct = last.return_pct();

@@ -77,6 +77,7 @@ pub fn simulate(
             cumulative_investment: state.cumulative_investment,
             cumulative_redemption: state.cumulative_redemption,
             cash: state.cash,
+            capital: state.capital,
         });
 
         dispatch(

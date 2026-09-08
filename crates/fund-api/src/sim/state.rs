@@ -8,12 +8,15 @@ pub struct PortfolioState {
     pub cumulative_redemption: f64,
     /// Uninvested cash available to the strategy.
     pub cash: f64,
+    /// Initial capital contributed by the investor.
+    pub capital: f64,
 }
 
 impl PortfolioState {
     pub fn with_capital(capital: f64) -> Self {
         Self {
             cash: capital,
+            capital,
             ..Self::default()
         }
     }
@@ -42,6 +45,8 @@ pub struct DailySnapshot {
     pub cumulative_investment: f64,
     pub cumulative_redemption: f64,
     pub cash: f64,
+    /// Initial capital contributed by the investor.
+    pub capital: f64,
 }
 
 impl DailySnapshot {
@@ -50,14 +55,14 @@ impl DailySnapshot {
     }
 
     pub fn profit(&self) -> f64 {
-        self.market_value() - self.cumulative_investment
+        self.market_value() - self.capital
     }
 
     pub fn return_pct(&self) -> f64 {
-        if self.cumulative_investment == 0.0 {
+        if self.capital == 0.0 {
             0.0
         } else {
-            self.profit() / self.cumulative_investment * 100.0
+            self.profit() / self.capital * 100.0
         }
     }
 }
