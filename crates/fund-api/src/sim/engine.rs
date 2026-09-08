@@ -19,8 +19,9 @@ pub fn simulate(
     navs: &[Nav],
     fee_rule: &mut dyn Rule,
     strategy: &mut dyn Strategy,
+    capital: f64,
 ) -> Result<SimulationResult> {
-    let mut state = PortfolioState::default();
+    let mut state = PortfolioState::with_capital(capital);
     let mut transactions: Vec<Transaction> = Vec::new();
     let mut snapshots: Vec<DailySnapshot> = Vec::new();
     let mut pending: Vec<Order> = Vec::new();
@@ -38,7 +39,9 @@ pub fn simulate(
         );
 
         for order in pending {
-            let transaction = execute(&mut state, order, nav, fee_rule)?;
+            let Some(transaction) = execute(&mut state, order, nav, fee_rule)? else {
+                continue;
+            };
             transactions.push(transaction.clone());
             dispatch(
                 strategy,
@@ -73,6 +76,7 @@ pub fn simulate(
             holding_share: state.holding_share,
             cumulative_investment: state.cumulative_investment,
             cumulative_redemption: state.cumulative_redemption,
+            cash: state.cash,
         });
 
         dispatch(
@@ -117,9 +121,14 @@ fn execute(
     order: Order,
     nav: &Nav,
     fee_rule: &mut dyn Rule,
-) -> Result<Transaction> {
+) -> Result<Option<Transaction>> {
     match order {
         Order::Invest { amount } => {
+            // Clamp the investment to the available cash; skip when none is left.
+            let amount = amount.min(state.cash);
+            if amount <= 0.0 {
+                return Ok(None);
+            }
             let fee = fee_rule.fee(OrderForFee::Invest {
                 date: nav.date,
                 unit_nav: nav.unit_nav,
@@ -127,7 +136,7 @@ fn execute(
             });
             let shares = (amount - fee) / nav.unit_nav;
             state.invest(amount, shares);
-            Ok(Transaction {
+            Ok(Some(Transaction {
                 date: nav.date,
                 unit_nav: nav.unit_nav,
                 kind: TransactionKind::Invest {
@@ -135,7 +144,7 @@ fn execute(
                     shares,
                     fee,
                 },
-            })
+            }))
         }
         Order::Redeem { shares } => {
             if state.holding_share < shares {
@@ -148,11 +157,11 @@ fn execute(
             });
             let money = nav.unit_nav * shares - fee;
             state.redeem(shares, money);
-            Ok(Transaction {
+            Ok(Some(Transaction {
                 date: nav.date,
                 unit_nav: nav.unit_nav,
                 kind: TransactionKind::Redeem { shares, money, fee },
-            })
+            }))
         }
     }
 }
@@ -204,7 +213,7 @@ mod tests {
 
         let mut fee_rule = Fifo::new(vec![], vec![]);
         let mut strategy = BuyThenSell { step: 0 };
-        let result = simulate(&navs(), &mut fee_rule, &mut strategy).unwrap();
+        let result = simulate(&navs(), &mut fee_rule, &mut strategy, 1000.0).unwrap();
 
         // Invest executes on day 2's nav (1.05) -> 100 / 1.05 shares.
         // Redeem executes on day 3's nav (1.0) -> 50 shares sold.
@@ -240,7 +249,67 @@ mod tests {
 
         let mut fee_rule = Fifo::new(vec![], vec![]);
         let mut strategy = BuyThenOversell { step: 0 };
-        let result = simulate(&navs(), &mut fee_rule, &mut strategy);
+        let result = simulate(&navs(), &mut fee_rule, &mut strategy, 1000.0);
         assert!(matches!(result, Err(Error::Insufficient)));
+    }
+
+    #[test]
+    fn test_invest_clamped_to_capital() {
+        struct Clamp {
+            done: bool,
+        }
+        impl Strategy for Clamp {
+            fn name(&self) -> &str {
+                "clamp"
+            }
+            fn on_event(&mut self, event: &Event, _ctx: &mut SimContext) -> Vec<Order> {
+                if !self.done {
+                    if let Event::NavUpdate { .. } = event {
+                        self.done = true;
+                        return vec![Order::Invest { amount: 500.0 }];
+                    }
+                }
+                Vec::new()
+            }
+        }
+
+        let mut fee_rule = Fifo::new(vec![], vec![]);
+        let mut strategy = Clamp { done: false };
+        let result = simulate(&navs(), &mut fee_rule, &mut strategy, 200.0).unwrap();
+        // Order placed on day 1's NavUpdate executes at day 2's nav (1.05),
+        // clamped to the available capital of 200.
+        assert_eq!(result.transactions.len(), 1);
+        assert_eq!(result.final_state.cumulative_investment, 200.0);
+        assert_eq!(result.final_state.holding_share, 200.0 / 1.05);
+        assert_eq!(result.final_state.cash, 0.0);
+    }
+
+    #[test]
+    fn test_invest_skipped_when_no_cash() {
+        struct Skip {
+            done: bool,
+        }
+        impl Strategy for Skip {
+            fn name(&self) -> &str {
+                "skip"
+            }
+            fn on_event(&mut self, event: &Event, _ctx: &mut SimContext) -> Vec<Order> {
+                if !self.done {
+                    if let Event::NavUpdate { .. } = event {
+                        self.done = true;
+                        return vec![Order::Invest { amount: 500.0 }];
+                    }
+                }
+                Vec::new()
+            }
+        }
+
+        let mut fee_rule = Fifo::new(vec![], vec![]);
+        let mut strategy = Skip { done: false };
+        let result = simulate(&navs(), &mut fee_rule, &mut strategy, 0.0).unwrap();
+        // No cash to invest: the order is skipped entirely.
+        assert_eq!(result.transactions.len(), 0);
+        assert_eq!(result.final_state.cumulative_investment, 0.0);
+        assert_eq!(result.final_state.cash, 0.0);
     }
 }

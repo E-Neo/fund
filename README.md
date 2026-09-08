@@ -69,9 +69,25 @@ POST /api/backtest                   run a backtest (BacktestInput -> BacktestRe
 - `dca`: invest a fixed amount on a regular schedule.
 
 Strategies are compiled to WebAssembly components and embedded into the
-binary. Bundled strategy sources live in `crates/fund-strategies/`, where the
-builtin `dca` strategy is selected via the `strategy` key in the config. A
-custom strategy is described by a JSON file pointing at a component:
+binary. Each strategy is a **self-contained component** under
+`crates/fund-strategies/<name>/` that describes its own hyper-parameters via
+a JSON Schema and parses its config from JSON. The web UI renders the strategy
+form dynamically from that schema, so no strategy configuration is hard-coded
+in the UI or the host.
+
+A strategy implements the interface in `wit/strategy.wit`:
+
+- `description()` and `config-schema()` describe the strategy so the host and
+  UI can discover it (e.g. `GET /api/strategies` returns the schema).
+- `init(config)` is called once with the serialized params as JSON and
+  returns an error string if the config is invalid.
+- `on-event(event)` is called for each `nav-update` and `order-executed`
+  event and returns a list of orders.
+
+Strategies keep their own state (including their recorded holdings) inside
+the guest and run in a wasm sandbox.
+
+A custom strategy loaded from a JSON descriptor file:
 
 ```json
 {
@@ -80,11 +96,12 @@ custom strategy is described by a JSON file pointing at a component:
 }
 ```
 
-A strategy implements the interface in `wit/strategy.wit`: `init(config)` is
-called once with the serialized `params` as JSON, then `on-event(event)` is
-called for each `nav-update` and `order-executed` event and returns a list of
-orders. Strategies keep their own state (including their recorded holdings)
-inside the guest.
+## Capital
+
+Every backtest has a `capital` budget. A strategy can only invest the cash it
+has: orders are **clamped** to the remaining cash and **skipped** when no cash
+is left. Redemptions return proceeds to the cash balance, so trading profits
+can be reinvested.
 
 ## Fees
 

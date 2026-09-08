@@ -26,15 +26,15 @@ pub struct FeeTier {
 pub struct StrategyInfo {
     pub name: String,
     pub description: String,
+    pub schema: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BacktestInput {
     pub code: String,
     pub strategy: String,
-    pub initial: f64,
-    pub dca_amount: f64,
-    pub dca_interval: u64,
+    pub params: serde_json::Value,
+    pub capital: f64,
     pub from: Option<String>,
     pub to: Option<String>,
 }

@@ -6,19 +6,30 @@ pub struct PortfolioState {
     pub holding_share: f64,
     pub cumulative_investment: f64,
     pub cumulative_redemption: f64,
+    /// Uninvested cash available to the strategy.
+    pub cash: f64,
 }
 
 impl PortfolioState {
+    pub fn with_capital(capital: f64) -> Self {
+        Self {
+            cash: capital,
+            ..Self::default()
+        }
+    }
+
     pub fn invest(&mut self, investment: f64, share: f64) {
         self.holding_price =
             (self.holding_price * self.holding_share + investment) / (self.holding_share + share);
         self.holding_share += share;
         self.cumulative_investment += investment;
+        self.cash -= investment;
     }
 
     pub fn redeem(&mut self, shares: f64, money: f64) {
         self.holding_share -= shares;
         self.cumulative_redemption += money;
+        self.cash += money;
     }
 }
 
@@ -30,11 +41,12 @@ pub struct DailySnapshot {
     pub holding_share: f64,
     pub cumulative_investment: f64,
     pub cumulative_redemption: f64,
+    pub cash: f64,
 }
 
 impl DailySnapshot {
     pub fn market_value(&self) -> f64 {
-        self.holding_share * self.unit_nav + self.cumulative_redemption
+        self.holding_share * self.unit_nav + self.cash
     }
 
     pub fn profit(&self) -> f64 {

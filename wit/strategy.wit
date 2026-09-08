@@ -40,7 +40,9 @@ interface strategy {
         redeem(f64),
     }
 
-    init: func(config: string);
+    description: func() -> string;
+    config-schema: func() -> string;
+    init: func(config: string) -> result<_, string>;
     on-event: func(event: event) -> list<order>;
 }
 

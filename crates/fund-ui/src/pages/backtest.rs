@@ -9,10 +9,10 @@ use leptos::task::spawn_local;
 #[component]
 pub fn BacktestPage() -> impl IntoView {
     let code = RwSignal::new(String::new());
-    let strategy = RwSignal::new(String::from("dca"));
-    let initial = RwSignal::new(1000.0f64);
-    let dca_amount = RwSignal::new(100.0f64);
-    let dca_interval = RwSignal::new(7u64);
+    let strategy = RwSignal::new(String::new());
+    let capital = RwSignal::new(10_000.0f64);
+    let params = RwSignal::new(serde_json::json!({}));
+    let schema = RwSignal::new(None::<serde_json::Value>);
     let from = RwSignal::new(String::new());
     let to = RwSignal::new(String::new());
     let range = RwSignal::new(None::<NavRange>);
@@ -59,6 +59,39 @@ pub fn BacktestPage() -> impl IntoView {
         });
     };
 
+    let on_strategy_change = move |e: leptos::ev::Event| {
+        let name = event_target_value(&e);
+        strategy.set(name.clone());
+        let found = strategies
+            .get_untracked()
+            .and_then(|r| r.ok())
+            .and_then(|list| {
+                list.into_iter()
+                    .find(|s| s.name == name)
+                    .map(|s| s.schema.clone())
+            });
+        schema.set(found.clone());
+        let mut map = serde_json::Map::new();
+        if let Some(sch) = found {
+            let props = sch
+                .get("properties")
+                .and_then(|p| p.as_object())
+                .cloned()
+                .unwrap_or_default();
+            for (key, spec) in props {
+                let default = spec.get("default").cloned().unwrap_or_else(|| {
+                    match spec.get("type").and_then(|t| t.as_str()) {
+                        Some("integer") | Some("number") => serde_json::json!(0),
+                        Some("boolean") => serde_json::json!(false),
+                        _ => serde_json::json!(""),
+                    }
+                });
+                map.insert(key, default);
+            }
+        }
+        params.set(serde_json::Value::Object(map));
+    };
+
     let on_run = move |_| {
         let from = {
             let v = from.get_untracked();
@@ -71,9 +104,8 @@ pub fn BacktestPage() -> impl IntoView {
         let input = BacktestInput {
             code: code.get_untracked(),
             strategy: strategy.get_untracked(),
-            initial: initial.get_untracked(),
-            dca_amount: dca_amount.get_untracked(),
-            dca_interval: dca_interval.get_untracked(),
+            params: params.get_untracked(),
+            capital: capital.get_untracked(),
             from,
             to,
         };
@@ -120,7 +152,13 @@ pub fn BacktestPage() -> impl IntoView {
                 }}
             </select>
             <label for="strategy">"Strategy"</label>
-            <select id="strategy" name="strategy" prop:value=strategy on:change=move |e| strategy.set(event_target_value(&e))>
+            <select
+                id="strategy"
+                name="strategy"
+                prop:value=strategy
+                on:change=on_strategy_change
+            >
+                <option value="">"Select a strategy..."</option>
                 {move || match strategies.get() {
                     Some(Ok(list)) => list
                         .iter()
@@ -131,6 +169,11 @@ pub fn BacktestPage() -> impl IntoView {
                     None => view! { <option>"Loading..."</option> }.into_any(),
                 }}
             </select>
+            <label for="capital">"Capital"</label>
+            <input id="capital" name="capital" type="number" prop:value=capital on:input=move |e| {
+                if let Ok(v) = event_target_value(&e).parse() { capital.set(v) }
+            } />
+            <ParamFields schema=schema params=params/>
             <label for="from">"From"</label>
             <input
                 id="from"
@@ -151,18 +194,6 @@ pub fn BacktestPage() -> impl IntoView {
                 max=range_max
                 on:input=move |e| to.set(event_target_value(&e))
             />
-            <label for="initial">"Initial amount"</label>
-            <input id="initial" name="initial" type="number" prop:value=initial on:input=move |e| {
-                if let Ok(v) = event_target_value(&e).parse() { initial.set(v) }
-            } />
-            <label for="dca_amount">"DCA amount"</label>
-            <input id="dca_amount" name="dca_amount" type="number" prop:value=dca_amount on:input=move |e| {
-                if let Ok(v) = event_target_value(&e).parse() { dca_amount.set(v) }
-            } />
-            <label for="dca_interval">"DCA interval (days)"</label>
-            <input id="dca_interval" name="dca_interval" type="number" prop:value=dca_interval on:input=move |e| {
-                if let Ok(v) = event_target_value(&e).parse() { dca_interval.set(v) }
-            } />
             <button type="button" on:click=on_run disabled=move || running.get()>
                 {move || if running.get() { "Running..." } else { "Run" }}
             </button>
@@ -194,12 +225,12 @@ pub fn BacktestPage() -> impl IntoView {
                         </div>
                         <div class="table-scroll">
                             <Chart
-                                title="Equity curve".to_string()
+                                title="Portfolio value".to_string()
                                 y_label="Value".to_string()
                                 series=vec![Series {
                                     points: report.curve.clone(),
                                     color: "#2b6cb0",
-                                    name: "equity",
+                                    name: "portfolio",
                                     decimals: 2,
                                     markers: vec![],
                                 }]
@@ -257,6 +288,93 @@ pub fn BacktestPage() -> impl IntoView {
                 })
             }}
         </div>
+    }
+}
+
+#[component]
+fn ParamFields(
+    schema: RwSignal<Option<serde_json::Value>>,
+    params: RwSignal<serde_json::Value>,
+) -> impl IntoView {
+    move || {
+        let Some(sch) = schema.get() else {
+            return ().into_any();
+        };
+        let props = sch
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .cloned()
+            .unwrap_or_default();
+        props
+            .into_iter()
+            .map(|(key, spec)| {
+                let key2 = key.clone();
+                let key_checked = key2.clone();
+                let key_change = key2.clone();
+                let ty = spec
+                    .get("type")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("string")
+                    .to_string();
+                let title = spec
+                    .get("title")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or(&key)
+                    .to_string();
+                let input_id = format!("param-{key}");
+                let is_bool = ty == "boolean";
+                let field_params = params;
+                view! {
+                    <label for=input_id.clone()>{title}</label>
+                    {if is_bool {
+                        view! {
+                            <input
+                                id=input_id.clone()
+                                name=input_id.clone()
+                                type="checkbox"
+                                prop:checked=move || field_params.get().get(&key_checked).and_then(|v| v.as_bool()).unwrap_or(false)
+                                on:change=move |e| {
+                                    let v = event_target_checked(&e);
+                                    field_params.update(|p| {
+                                        if let Some(o) = p.as_object_mut() {
+                                            o.insert(key_change.clone(), serde_json::json!(v));
+                                        }
+                                    });
+                                }
+                            />
+                        }.into_any()
+                    } else {
+                        let key_value = key2.clone();
+                        let key_input = key2.clone();
+                        view! {
+                            <input
+                                id=input_id.clone()
+                                name=input_id.clone()
+                                type="number"
+                                step="any"
+                                prop:value=move || field_params.get().get(&key_value).map(|v| v.to_string()).unwrap_or_default()
+                                on:input=move |e| {
+                                    let text = event_target_value(&e);
+                                    let parsed = if ty == "integer" {
+                                        text.parse::<i64>().ok().map(serde_json::Value::from)
+                                    } else {
+                                        text.parse::<f64>().ok().map(serde_json::Value::from)
+                                    };
+                                    if let Some(v) = parsed {
+                                        field_params.update(|p| {
+                                            if let Some(o) = p.as_object_mut() {
+                                                o.insert(key_input.clone(), v);
+                                            }
+                                        });
+                                    }
+                                }
+                            />
+                        }.into_any()
+                    }}
+                }
+            })
+            .collect_view()
+            .into_any()
     }
 }
 

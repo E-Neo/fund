@@ -60,13 +60,13 @@ fn embedded_dca_matches_native() -> Result<()> {
         interval: 5,
         day: 0,
     };
-    let native_result = engine::simulate(&navs, &mut fee_rule, &mut native)?;
+    let native_result = engine::simulate(&navs, &mut fee_rule, &mut native, 10_000.0)?;
     assert_eq!(native_result.transactions.len(), 4);
 
-    let config = r#"{"strategy":"dca","amount":100,"interval":5}"#;
-    let mut wasm = strategy::embedded("dca", config)?;
+    let config = serde_json::json!({"amount": 100, "interval": 5});
+    let mut wasm = strategy::load(&strategy::StrategyArg::Bundled("dca".to_string()), &config)?;
     let mut fee_rule = Fifo::new(vec![], vec![]);
-    let wasm_result = engine::simulate(&navs, &mut fee_rule, wasm.as_mut())?;
+    let wasm_result = engine::simulate(&navs, &mut fee_rule, wasm.as_mut(), 10_000.0)?;
 
     assert_eq!(
         wasm_result.transactions.len(),

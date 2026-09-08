@@ -38,10 +38,10 @@ fn main() {
     let artifact = guest_target
         .join("wasm32-wasip2")
         .join("release")
-        .join("fund_strategies.wasm");
-    let dest = out_dir.join("fund_strategies.wasm");
+        .join("dca.wasm");
+    let dest = out_dir.join("dca.wasm");
     std::fs::copy(&artifact, &dest)
-        .unwrap_or_else(|err| panic!("failed to copy fund_strategies component: {err}"));
+        .unwrap_or_else(|err| panic!("failed to copy dca component: {err}"));
 }
 
 fn rerun_if_changed(dir: &Path) {

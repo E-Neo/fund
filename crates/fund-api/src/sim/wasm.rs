@@ -52,6 +52,23 @@ impl WasmStrategy {
         Ok(strategy)
     }
 
+    /// Describe a component's metadata (description + config schema) without
+    /// initializing it.
+    pub fn metadata(bytes: &[u8]) -> Result<(String, String)> {
+        let engine = Engine::default();
+        let component = Component::from_binary(&engine, bytes)?;
+        let mut strategy = Self::from_component(engine, component, "meta".to_string())?;
+        let description = strategy
+            .world
+            .fund_strategy_strategy()
+            .call_description(&mut strategy.store)?;
+        let schema = strategy
+            .world
+            .fund_strategy_strategy()
+            .call_config_schema(&mut strategy.store)?;
+        Ok((description, schema))
+    }
+
     fn from_binary(bytes: &[u8], name: String) -> Result<Self> {
         let engine = Engine::default();
         let component = Component::from_binary(&engine, bytes)?;
@@ -73,10 +90,11 @@ impl WasmStrategy {
     }
 
     fn init(&mut self, config: &str) -> Result<()> {
-        self.world
+        let result = self
+            .world
             .fund_strategy_strategy()
             .call_init(&mut self.store, config)?;
-        Ok(())
+        result.map_err(crate::error::Error::Wasm)
     }
 }
 
