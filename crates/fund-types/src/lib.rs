@@ -32,11 +32,11 @@ pub struct StrategyInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BacktestInput {
     pub code: String,
+    pub start_date: Option<String>,
+    pub days: Option<u64>,
+    pub capital: f64,
     pub strategy: String,
     pub params: serde_json::Value,
-    pub capital: f64,
-    pub from: Option<String>,
-    pub to: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

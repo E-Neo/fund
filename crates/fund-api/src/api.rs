@@ -182,25 +182,25 @@ async fn list_strategies() -> Json<Vec<StrategyInfo>> {
 }
 
 async fn run_backtest(Json(input): Json<BacktestInput>) -> Result<Json<BacktestReport>, ApiError> {
-    use chrono::NaiveDate;
+    use chrono::{Duration, NaiveDate};
     let navs = crate::db::load_navs(config::pool(), &input.code)
         .await
         .map_err(api_err)?;
-    let from = input
-        .from
+    let start = input
+        .start_date
         .as_deref()
         .map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d"))
         .transpose()
         .map_err(api_err)?;
-    let to = input
-        .to
-        .as_deref()
-        .map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d"))
-        .transpose()
-        .map_err(api_err)?;
+    // Restrict to a calendar-day window when a start date and period length
+    // are given: `end = start + days - 1`.
+    let end = match (start, input.days) {
+        (Some(start), Some(days)) => Some(start + Duration::days(days as i64 - 1)),
+        _ => None,
+    };
     let navs: Vec<_> = navs
         .into_iter()
-        .filter(|nav| from.is_none_or(|f| nav.date >= f) && to.is_none_or(|t| nav.date <= t))
+        .filter(|nav| start.is_none_or(|s| nav.date >= s) && end.is_none_or(|e| nav.date <= e))
         .collect();
     if navs.is_empty() {
         return Err((

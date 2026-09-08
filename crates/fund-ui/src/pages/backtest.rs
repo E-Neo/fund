@@ -13,8 +13,8 @@ pub fn BacktestPage() -> impl IntoView {
     let capital = RwSignal::new(10_000.0f64);
     let params = RwSignal::new(serde_json::json!({}));
     let schema = RwSignal::new(None::<serde_json::Value>);
-    let from = RwSignal::new(String::new());
-    let to = RwSignal::new(String::new());
+    let start_date = RwSignal::new(String::new());
+    let days = RwSignal::new(String::new());
     let range = RwSignal::new(None::<NavRange>);
 
     let strategies = RwSignal::new(None::<Result<Vec<StrategyInfo>, String>>);
@@ -42,16 +42,25 @@ pub fn BacktestPage() -> impl IntoView {
         code.set(value.clone());
         if value.is_empty() {
             range.set(None);
-            from.set(String::new());
-            to.set(String::new());
+            start_date.set(String::new());
+            days.set(String::new());
             return;
         }
         let future = api::fund_range(value);
         spawn_local(async move {
             match future.await {
                 Ok(r) => {
-                    from.set(r.from.clone());
-                    to.set(r.to.clone());
+                    start_date.set(r.from.clone());
+                    // Default the period to the fund's full calendar-day span.
+                    let from = chrono::NaiveDate::parse_from_str(&r.from, "%Y-%m-%d").ok();
+                    let to = chrono::NaiveDate::parse_from_str(&r.to, "%Y-%m-%d").ok();
+                    days.set(
+                        match (from, to) {
+                            (Some(f), Some(t)) => (t - f).num_days() + 1,
+                            _ => 0,
+                        }
+                        .to_string(),
+                    );
                     range.set(Some(r));
                 }
                 Err(err) => leptos::logging::error!("failed to load range: {err}"),
@@ -93,22 +102,28 @@ pub fn BacktestPage() -> impl IntoView {
     };
 
     let on_run = move |_| {
-        let from = {
-            let v = from.get_untracked();
-            if v.is_empty() { None } else { Some(v) }
-        };
-        let to = {
-            let v = to.get_untracked();
-            if v.is_empty() { None } else { Some(v) }
-        };
-        let input = BacktestInput {
+        let mut input = BacktestInput {
             code: code.get_untracked(),
+            start_date: None,
+            days: None,
+            capital: capital.get_untracked(),
             strategy: strategy.get_untracked(),
             params: params.get_untracked(),
-            capital: capital.get_untracked(),
-            from,
-            to,
         };
+        let start = {
+            let v = start_date.get_untracked();
+            if v.is_empty() { None } else { Some(v) }
+        };
+        let days_n = {
+            let v = days.get_untracked();
+            if v.is_empty() { None } else { v.parse().ok() }
+        };
+        if start.is_some() {
+            input.start_date = start;
+        }
+        if days_n.is_some() {
+            input.days = days_n;
+        }
         running.set(true);
         error.set(None);
         let future = api::run_backtest(input);
@@ -151,6 +166,29 @@ pub fn BacktestPage() -> impl IntoView {
                     _ => view! { <option>"Loading..."</option> }.into_any(),
                 }}
             </select>
+            <label for="start-date">"From"</label>
+            <input
+                id="start-date"
+                name="start-date"
+                type="date"
+                prop:value=start_date
+                min=range_min
+                max=range_max
+                on:input=move |e| start_date.set(event_target_value(&e))
+            />
+            <label for="days">"Days"</label>
+            <input
+                id="days"
+                name="days"
+                type="number"
+                min="1"
+                prop:value=days
+                on:input=move |e| days.set(event_target_value(&e))
+            />
+            <label for="capital">"Initial capital"</label>
+            <input id="capital" name="capital" type="number" prop:value=capital on:input=move |e| {
+                if let Ok(v) = event_target_value(&e).parse() { capital.set(v) }
+            } />
             <label for="strategy">"Strategy"</label>
             <select
                 id="strategy"
@@ -169,31 +207,7 @@ pub fn BacktestPage() -> impl IntoView {
                     None => view! { <option>"Loading..."</option> }.into_any(),
                 }}
             </select>
-            <label for="capital">"Capital"</label>
-            <input id="capital" name="capital" type="number" prop:value=capital on:input=move |e| {
-                if let Ok(v) = event_target_value(&e).parse() { capital.set(v) }
-            } />
             <ParamFields schema=schema params=params/>
-            <label for="from">"From"</label>
-            <input
-                id="from"
-                name="from"
-                type="date"
-                prop:value=from
-                min=range_min
-                max=range_max
-                on:input=move |e| from.set(event_target_value(&e))
-            />
-            <label for="to">"To"</label>
-            <input
-                id="to"
-                name="to"
-                type="date"
-                prop:value=to
-                min=range_min
-                max=range_max
-                on:input=move |e| to.set(event_target_value(&e))
-            />
             <button type="button" on:click=on_run disabled=move || running.get()>
                 {move || if running.get() { "Running..." } else { "Run" }}
             </button>
