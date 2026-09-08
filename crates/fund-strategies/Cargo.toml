@@ -1,5 +1,5 @@
 [workspace]
-members = ["dca"]
+members = ["dollar-cost-averaging"]
 resolver = "3"
 
 [workspace.package]

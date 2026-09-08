@@ -52,21 +52,25 @@ impl WasmStrategy {
         Ok(strategy)
     }
 
-    /// Describe a component's metadata (description + config schema) without
-    /// initializing it.
-    pub fn metadata(bytes: &[u8]) -> Result<(String, String)> {
+    /// Describe a component's metadata (name + description + config schema)
+    /// without initializing it.
+    pub fn metadata(bytes: &[u8]) -> Result<(String, String, String)> {
         let engine = Engine::default();
         let component = Component::from_binary(&engine, bytes)?;
         let mut strategy = Self::from_component(engine, component, "meta".to_string())?;
+        let name = strategy
+            .world
+            .fund_strategy_trader()
+            .call_name(&mut strategy.store)?;
         let description = strategy
             .world
-            .fund_strategy_strategy()
+            .fund_strategy_trader()
             .call_description(&mut strategy.store)?;
         let schema = strategy
             .world
-            .fund_strategy_strategy()
+            .fund_strategy_trader()
             .call_config_schema(&mut strategy.store)?;
-        Ok((description, schema))
+        Ok((name, description, schema))
     }
 
     fn from_binary(bytes: &[u8], name: String) -> Result<Self> {
@@ -92,7 +96,7 @@ impl WasmStrategy {
     fn init(&mut self, config: &str) -> Result<()> {
         let result = self
             .world
-            .fund_strategy_strategy()
+            .fund_strategy_trader()
             .call_init(&mut self.store, config)?;
         result.map_err(crate::error::Error::Wasm)
     }
@@ -109,25 +113,21 @@ impl Strategy for WasmStrategy {
         };
         let orders = self
             .world
-            .fund_strategy_strategy()
+            .fund_strategy_trader()
             .call_on_event(&mut self.store, &wit_event)
             .unwrap_or_default();
         orders
             .into_iter()
             .map(|order| match order {
-                exports::fund::strategy::strategy::Order::Invest(amount) => {
-                    Order::Invest { amount }
-                }
-                exports::fund::strategy::strategy::Order::Redeem(shares) => {
-                    Order::Redeem { shares }
-                }
+                exports::fund::strategy::trader::Order::Invest(amount) => Order::Invest { amount },
+                exports::fund::strategy::trader::Order::Redeem(shares) => Order::Redeem { shares },
             })
             .collect()
     }
 }
 
-fn map_event(event: &Event) -> Option<exports::fund::strategy::strategy::Event> {
-    use exports::fund::strategy::strategy::{
+fn map_event(event: &Event) -> Option<exports::fund::strategy::trader::Event> {
+    use exports::fund::strategy::trader::{
         Event as WitEvent, InvestExecuted, NavUpdate, OrderExecuted, RedeemExecuted,
         TransactionKind,
     };

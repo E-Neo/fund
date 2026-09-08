@@ -168,11 +168,11 @@ async fn fund_rules(Path(code): Path<String>) -> Result<Json<Vec<FeeTier>>, ApiE
 async fn list_strategies() -> Json<Vec<StrategyInfo>> {
     Json(
         strategy::list()
-            .iter()
+            .into_iter()
             .map(|meta| {
                 let schema = serde_json::from_str(&meta.schema).unwrap_or(serde_json::json!({}));
                 StrategyInfo {
-                    name: meta.name.to_string(),
+                    name: meta.name.clone(),
                     description: meta.description.clone(),
                     schema,
                 }
@@ -219,9 +219,15 @@ async fn run_backtest(Json(input): Json<BacktestInput>) -> Result<Json<BacktestR
         subscribe: vec![],
         redeem: vec![],
     });
-    let mut fee_rule = rules::Fifo::new(fee_rule.subscribe, fee_rule.redeem);
+    let ctx = strategy::StrategyCtx {
+        navs: &navs,
+        fee_rule: &fee_rule,
+        capital: input.capital,
+    };
     let arg = StrategyArg::Bundled(input.strategy.clone());
-    let mut strategy = strategy::load(&arg, &input.params).map_err(api_err)?;
+    let mut strategy = strategy::load(&arg, &input.params, &ctx).map_err(api_err)?;
+    let mut fee_rule =
+        rules::Fifo::new(ctx.fee_rule.subscribe.clone(), ctx.fee_rule.redeem.clone());
     let result =
         engine_simulate(&navs, &mut fee_rule, strategy.as_mut(), input.capital).map_err(api_err)?;
     let report = report::build(start, end, days, &result);

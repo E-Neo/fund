@@ -1,11 +1,11 @@
 [package]
-name = "fund-strategies-dca"
+name = "fund-strategies-dollar-cost-averaging"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
 
 [lib]
-name = "dca"
+name = "dollar_cost_averaging"
 crate-type = ["cdylib"]
 
 [dependencies]

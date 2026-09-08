@@ -3,7 +3,7 @@ wit_bindgen::generate!({
     path: "../../../wit/strategy.wit",
 });
 
-use exports::fund::strategy::strategy::{Event, Order};
+use exports::fund::strategy::trader::{Event, Order};
 use serde::Deserialize;
 use std::sync::Mutex;
 
@@ -45,7 +45,11 @@ static STATE: Mutex<State> = Mutex::new(State { params: None, day: 0 });
 
 struct FundStrategies;
 
-impl exports::fund::strategy::strategy::Guest for FundStrategies {
+impl exports::fund::strategy::trader::Guest for FundStrategies {
+    fn name() -> String {
+        "Dollar Cost Averaging".to_string()
+    }
+
     fn description() -> String {
         "invest a fixed amount on a regular schedule".to_string()
     }

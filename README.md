@@ -66,19 +66,24 @@ POST /api/backtest                   run a backtest (BacktestInput -> BacktestRe
 
 ## Strategies
 
-- `dca`: invest a fixed amount on a regular schedule.
+- `Dollar Cost Averaging`: invest a fixed amount on a regular schedule.
+- `Oracle` (virtual): sees the full history and future of a fund and picks the
+  single buy/sell pair that maximizes net profit after fees. Not a real
+  strategy — it cannot be implemented with the guest interface because it
+  knows the future.
 
 Strategies are compiled to WebAssembly components and embedded into the
 binary. Each strategy is a **self-contained component** under
 `crates/fund-strategies/<name>/` that describes its own hyper-parameters via
 a JSON Schema and parses its config from JSON. The web UI renders the strategy
 form dynamically from that schema, so no strategy configuration is hard-coded
-in the UI or the host.
+in the UI or the host. The `Oracle` strategy is implemented natively in the
+host (it needs the full nav history and fee rule up front).
 
 A strategy implements the interface in `wit/strategy.wit`:
 
-- `description()` and `config-schema()` describe the strategy so the host and
-  UI can discover it (e.g. `GET /api/strategies` returns the schema).
+- `name()`, `description()`, and `config-schema()` describe the strategy so
+  the host and UI can discover it (e.g. `GET /api/strategies` returns them).
 - `init(config)` is called once with the serialized params as JSON and
   returns an error string if the config is invalid.
 - `on-event(event)` is called for each `nav-update` and `order-executed`
