@@ -1,5 +1,12 @@
 package fund:strategy;
 
+interface fees {
+    /// Redemption fee the platform would charge to redeem `shares` now.
+    redeem-fee: func(shares: f64) -> f64;
+    /// Subscription fee the platform would charge to invest `amount`.
+    subscribe-fee: func(amount: f64) -> f64;
+}
+
 interface trader {
     record nav-update {
         date: string,
@@ -48,5 +55,6 @@ interface trader {
 }
 
 world fund-strategy {
+    import fees;
     export trader;
 }

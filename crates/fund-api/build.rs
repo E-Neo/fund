@@ -35,13 +35,19 @@ fn main() {
         panic!("cargo build for guest strategies failed");
     }
 
-    let artifact = guest_target
-        .join("wasm32-wasip2")
-        .join("release")
-        .join("dollar_cost_averaging.wasm");
-    let dest = out_dir.join("dollar_cost_averaging.wasm");
-    std::fs::copy(&artifact, &dest)
-        .unwrap_or_else(|err| panic!("failed to copy dollar_cost_averaging component: {err}"));
+    // Copy every built strategy component into OUT_DIR.
+    let release_dir = guest_target.join("wasm32-wasip2").join("release");
+    let entries = std::fs::read_dir(&release_dir)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", release_dir.display()));
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "wasm") {
+            let name = path.file_name().expect("wasm file has a name");
+            let dest = out_dir.join(name);
+            std::fs::copy(&path, &dest)
+                .unwrap_or_else(|err| panic!("failed to copy {}: {err}", path.display()));
+        }
+    }
 }
 
 fn rerun_if_changed(dir: &Path) {

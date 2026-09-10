@@ -67,10 +67,12 @@ POST /api/backtest                   run a backtest (BacktestInput -> BacktestRe
 ## Strategies
 
 - `Dollar Cost Averaging`: invest a fixed amount on a regular schedule.
-- `Oracle` (virtual): sees the full history and future of a fund and picks the
-  single buy/sell pair that maximizes net profit after fees. Not a real
-  strategy — it cannot be implemented with the guest interface because it
-  knows the future.
+- `Dip Take Profit`: keep a FILO stack of fixed-size lots; buy when the price
+  drops a threshold percent below the previous session, and redeem the most
+  recent lot once its net gain (after fees) reaches a target percent.
+- `Oracle` (virtual): sees the full history and future of a fund and greedily
+  captures every profitable swing. Not a real strategy — it cannot be
+  implemented with the guest interface because it knows the future.
 
 Strategies are compiled to WebAssembly components and embedded into the
 binary. Each strategy is a **self-contained component** under
@@ -88,9 +90,15 @@ A strategy implements the interface in `wit/strategy.wit`:
   returns an error string if the config is invalid.
 - `on-event(event)` is called for each `nav-update` and `order-executed`
   event and returns a list of orders.
+- The platform also **imports** a `fees` interface (`redeem-fee(shares)` /
+  `subscribe-fee(amount)`) so a strategy can ask what a trade would cost
+  without knowing the fee schedule or the platform's lot accounting.
 
 Strategies keep their own state (including their recorded holdings) inside
 the guest and run in a wasm sandbox.
+
+Orders settle **same-day**: a strategy observes a day's NAV and its orders
+execute at that same day's NAV.
 
 A custom strategy loaded from a JSON descriptor file:
 

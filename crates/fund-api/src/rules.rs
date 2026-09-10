@@ -48,8 +48,15 @@ impl Tier {
     }
 }
 
-pub trait Rule {
+pub trait Rule: Send {
     fn fee(&mut self, order: OrderForFee) -> f64;
+
+    /// Redemption fee the rule would charge to redeem `shares` on `date` at
+    /// `unit_nav`, without mutating any state.
+    fn preview_redeem_fee(&self, shares: f64, date: NaiveDate, unit_nav: f64) -> f64;
+
+    /// Subscription fee the rule would charge to invest `amount`.
+    fn subscribe_fee(&self, amount: f64) -> f64;
 }
 
 pub struct Fifo {
@@ -111,6 +118,23 @@ impl Rule for Fifo {
                 fee
             }
         }
+    }
+
+    fn preview_redeem_fee(&self, mut shares: f64, date: NaiveDate, unit_nav: f64) -> f64 {
+        let mut fee = 0.0;
+        for (invest_date, share) in &self.lots {
+            if shares <= 0.0 {
+                break;
+            }
+            let taken = shares.min(*share);
+            fee += redemption_fee(&self.redemption_tiers, *invest_date, date, unit_nav, taken);
+            shares -= taken;
+        }
+        fee
+    }
+
+    fn subscribe_fee(&self, amount: f64) -> f64 {
+        tier_fee(&self.investment_tiers, amount, amount)
     }
 }
 

@@ -18,7 +18,7 @@ use chrono::NaiveDate;
 /// the guest interface cannot see the future.
 pub struct Oracle {
     /// Ordered plan of orders to emit, keyed by the NavUpdate date on which
-    /// the order must be placed (orders settle at the next day's nav, T+1).
+    /// the order is emitted and settles (same-day).
     plan: Vec<(NaiveDate, Order)>,
     cursor: usize,
 }
@@ -55,21 +55,21 @@ impl Strategy for Oracle {
 /// Build the optimal buy/sell plan with a single forward pass over the navs.
 ///
 /// A buy is placed on the NavUpdate of day `b - 1` and settles at `navs[b]`
-/// (T+1), so the effective tradeable series is `navs[1..]`. The oracle buys
-/// all-in at each local minimum and sells everything at the following local
-/// maximum. A segment is kept only if its net proceeds after subscription and
-/// redemption fees exceed the cash it started with — transaction costs never
-/// turn a winning trade into a losing one.
+/// Settlement is same-day, so the oracle buys all-in at each local minimum and
+/// sells everything at the following local maximum, emitting each order on the
+/// day it should execute. A segment is kept only if its net proceeds after
+/// subscription and redemption fees exceed the cash it started with —
+/// transaction costs never turn a winning trade into a losing one.
 fn build_plan(navs: &[Nav], fee_rule: &FeeRule, capital: f64) -> Vec<(NaiveDate, Order)> {
     let n = navs.len();
     let mut plan = Vec::new();
-    if n < 3 || capital <= 0.0 {
+    if n < 2 || capital <= 0.0 {
         return plan;
     }
     let mut cash = capital;
-    let mut buy = 1usize;
+    let mut buy = 0usize;
     while buy + 1 < n {
-        // Advance to a local minimum of the effective series (start of a rise).
+        // Advance to a local minimum (start of a rise).
         while buy + 1 < n && navs[buy + 1].unit_nav <= navs[buy].unit_nav {
             buy += 1;
         }
@@ -83,9 +83,9 @@ fn build_plan(navs: &[Nav], fee_rule: &FeeRule, capital: f64) -> Vec<(NaiveDate,
         }
         let (amount, shares, net) = net_cash(navs, fee_rule, buy, sell, cash);
         if net > cash {
-            // Order placed on day buy-1 settles at navs[buy]; likewise for sell.
-            plan.push((navs[buy - 1].date, Order::Invest { amount }));
-            plan.push((navs[sell - 1].date, Order::Redeem { shares }));
+            // Orders settle the same day they are emitted.
+            plan.push((navs[buy].date, Order::Invest { amount }));
+            plan.push((navs[sell].date, Order::Redeem { shares }));
             cash = net;
         }
         buy = sell + 1;

@@ -1,14 +1,18 @@
 use crate::{
     error::Result,
+    rules::Fifo,
     sim::{
         event::{Event, Order, TransactionKind as EngineTransactionKind},
+        fees::FeeService,
         strategy::{SimContext, Strategy},
     },
 };
+use chrono::NaiveDate;
 use std::path::Path;
+use std::sync::Arc;
 use wasmtime::{
     Engine, Store,
-    component::{Component, Linker, ResourceTable},
+    component::{Component, HasSelf, Linker, ResourceTable},
 };
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
@@ -20,6 +24,7 @@ wasmtime::component::bindgen!({
 pub struct HostWasi {
     wasi: WasiCtx,
     table: ResourceTable,
+    fee_service: Arc<FeeService>,
 }
 
 impl WasiView for HostWasi {
@@ -31,6 +36,17 @@ impl WasiView for HostWasi {
     }
 }
 
+/// The `fees` interface the platform exposes to strategies.
+impl fund::strategy::fees::Host for HostWasi {
+    fn redeem_fee(&mut self, shares: f64) -> f64 {
+        self.fee_service.redeem_fee(shares)
+    }
+
+    fn subscribe_fee(&mut self, amount: f64) -> f64 {
+        self.fee_service.subscribe_fee(amount)
+    }
+}
+
 pub struct WasmStrategy {
     name: String,
     store: Store<HostWasi>,
@@ -38,16 +54,26 @@ pub struct WasmStrategy {
 }
 
 impl WasmStrategy {
-    pub fn embedded(bytes: &'static [u8], name: String, config: &str) -> Result<Self> {
-        let mut strategy = Self::from_binary(bytes, name)?;
+    pub fn embedded(
+        bytes: &'static [u8],
+        name: String,
+        config: &str,
+        fee_service: Arc<FeeService>,
+    ) -> Result<Self> {
+        let mut strategy = Self::from_binary(bytes, name, fee_service)?;
         strategy.init(config)?;
         Ok(strategy)
     }
 
-    pub fn from_file(path: &Path, name: String, config: &str) -> Result<Self> {
+    pub fn from_file(
+        path: &Path,
+        name: String,
+        config: &str,
+        fee_service: Arc<FeeService>,
+    ) -> Result<Self> {
         let engine = Engine::default();
         let component = Component::from_file(&engine, path)?;
-        let mut strategy = Self::from_component(engine, component, name)?;
+        let mut strategy = Self::from_component(engine, component, name, fee_service)?;
         strategy.init(config)?;
         Ok(strategy)
     }
@@ -57,7 +83,8 @@ impl WasmStrategy {
     pub fn metadata(bytes: &[u8]) -> Result<(String, String, String)> {
         let engine = Engine::default();
         let component = Component::from_binary(&engine, bytes)?;
-        let mut strategy = Self::from_component(engine, component, "meta".to_string())?;
+        let mut strategy =
+            Self::from_component(engine, component, "meta".to_string(), default_fee_service())?;
         let name = strategy
             .world
             .fund_strategy_trader()
@@ -73,20 +100,27 @@ impl WasmStrategy {
         Ok((name, description, schema))
     }
 
-    fn from_binary(bytes: &[u8], name: String) -> Result<Self> {
+    fn from_binary(bytes: &[u8], name: String, fee_service: Arc<FeeService>) -> Result<Self> {
         let engine = Engine::default();
         let component = Component::from_binary(&engine, bytes)?;
-        Self::from_component(engine, component, name)
+        Self::from_component(engine, component, name, fee_service)
     }
 
-    fn from_component(engine: Engine, component: Component, name: String) -> Result<Self> {
+    fn from_component(
+        engine: Engine,
+        component: Component,
+        name: String,
+        fee_service: Arc<FeeService>,
+    ) -> Result<Self> {
         let mut linker = Linker::<HostWasi>::new(&engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
+        FundStrategy::add_to_linker::<_, HasSelf<_>>(&mut linker, |state: &mut HostWasi| state)?;
         let mut store = Store::new(
             &engine,
             HostWasi {
                 wasi: WasiCtxBuilder::new().build(),
                 table: ResourceTable::new(),
+                fee_service,
             },
         );
         let world = FundStrategy::instantiate(&mut store, &component, &linker)?;
@@ -100,6 +134,11 @@ impl WasmStrategy {
             .call_init(&mut self.store, config)?;
         result.map_err(crate::error::Error::Wasm)
     }
+}
+
+fn default_fee_service() -> Arc<FeeService> {
+    let today = NaiveDate::from_ymd_opt(1970, 1, 1).expect("valid date");
+    Arc::new(FeeService::new(Box::new(Fifo::new(vec![], vec![])), today))
 }
 
 impl Strategy for WasmStrategy {

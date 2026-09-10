@@ -1,5 +1,5 @@
 [workspace]
-members = ["dollar-cost-averaging"]
+members = ["dip-take-profit", "dollar-cost-averaging"]
 resolver = "3"
 
 [workspace.package]

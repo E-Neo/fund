@@ -1,0 +1,15 @@
+[package]
+name = "fund-strategies-dip-take-profit"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+
+[lib]
+name = "dip_take_profit"
+crate-type = ["cdylib"]
+
+[dependencies]
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+wit-bindgen.workspace = true

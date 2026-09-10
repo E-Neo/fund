@@ -13,6 +13,7 @@ use fund_types::{
     BacktestInput, BacktestMarker, BacktestReport, CurvePoint, FeeTier, FundInfo, NavPoint,
     NavRange, StrategyInfo,
 };
+use std::sync::Arc;
 
 /// Build the REST API router.
 pub fn router() -> Router {
@@ -219,17 +220,23 @@ async fn run_backtest(Json(input): Json<BacktestInput>) -> Result<Json<BacktestR
         subscribe: vec![],
         redeem: vec![],
     });
+    let fee_service = Arc::new(crate::sim::fees::FeeService::new(
+        Box::new(rules::Fifo::new(
+            fee_rule.subscribe.clone(),
+            fee_rule.redeem.clone(),
+        )),
+        start,
+    ));
     let ctx = strategy::StrategyCtx {
         navs: &navs,
         fee_rule: &fee_rule,
+        fee_service: Arc::clone(&fee_service),
         capital: input.capital,
     };
     let arg = StrategyArg::Bundled(input.strategy.clone());
     let mut strategy = strategy::load(&arg, &input.params, &ctx).map_err(api_err)?;
-    let mut fee_rule =
-        rules::Fifo::new(ctx.fee_rule.subscribe.clone(), ctx.fee_rule.redeem.clone());
     let result =
-        engine_simulate(&navs, &mut fee_rule, strategy.as_mut(), input.capital).map_err(api_err)?;
+        engine_simulate(&navs, &fee_service, strategy.as_mut(), input.capital).map_err(api_err)?;
     let report = report::build(start, end, days, &result);
 
     let curve = result
@@ -327,15 +334,15 @@ async fn run_backtest(Json(input): Json<BacktestInput>) -> Result<Json<BacktestR
     }))
 }
 
-use crate::rules::Rule;
 use crate::sim::engine;
 use crate::sim::engine::SimulationResult;
+use crate::sim::fees::FeeService;
 
 fn engine_simulate(
     navs: &[crate::eastmoney::Nav],
-    fee_rule: &mut dyn Rule,
+    fee_service: &FeeService,
     strategy: &mut dyn strategy::Strategy,
     capital: f64,
 ) -> crate::error::Result<SimulationResult> {
-    engine::simulate(navs, fee_rule, strategy, capital)
+    engine::simulate(navs, fee_service, strategy, capital)
 }

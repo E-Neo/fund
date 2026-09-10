@@ -3,6 +3,7 @@ use crate::{
     fees::FeeRule,
     sim::{
         event::{Event, Order, Transaction},
+        fees::FeeService,
         oracle::Oracle,
         state::PortfolioState,
         wasm::WasmStrategy,
@@ -10,7 +11,7 @@ use crate::{
 };
 use chrono::NaiveDate;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 #[derive(Debug, Clone)]
 pub enum StrategyArg {
@@ -19,10 +20,11 @@ pub enum StrategyArg {
 }
 
 /// Context needed to construct a strategy that can see the whole backtest
-/// (e.g. the native oracle).
+/// (e.g. the native oracle) or that queries the platform for fees.
 pub struct StrategyCtx<'a> {
     pub navs: &'a [crate::eastmoney::Nav],
     pub fee_rule: &'a FeeRule,
+    pub fee_service: Arc<FeeService>,
     pub capital: f64,
 }
 
@@ -40,10 +42,10 @@ pub trait Strategy {
 }
 
 /// Embedded wasm strategy components.
-const WASM_BLOBS: &[&[u8]] = &[include_bytes!(concat!(
-    env!("OUT_DIR"),
-    "/dollar_cost_averaging.wasm"
-))];
+const WASM_BLOBS: &[&[u8]] = &[
+    include_bytes!(concat!(env!("OUT_DIR"), "/dollar_cost_averaging.wasm")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/dip_take_profit.wasm")),
+];
 
 /// A bundled strategy: metadata plus, for wasm components, the raw bytes.
 struct Builtin {
@@ -117,16 +119,17 @@ pub fn load(
                         bytes,
                         name.to_string(),
                         &config,
+                        Arc::clone(&ctx.fee_service),
                     )?))
                 }
                 None => Ok(Box::new(Oracle::new(ctx.navs, ctx.fee_rule, ctx.capital))),
             }
         }
-        StrategyArg::File(path) => load_plugin(path),
+        StrategyArg::File(path) => load_plugin(path, ctx.fee_service.clone()),
     }
 }
 
-fn load_plugin(path: &Path) -> Result<Box<dyn Strategy>> {
+fn load_plugin(path: &Path, fee_service: Arc<FeeService>) -> Result<Box<dyn Strategy>> {
     let text = std::fs::read_to_string(path)?;
     let parsed: serde_json::Value = serde_json::from_str(&text)
         .map_err(|err| Error::Parse(format!("invalid strategy json {}: {err}", path.display())))?;
@@ -148,5 +151,6 @@ fn load_plugin(path: &Path) -> Result<Box<dyn Strategy>> {
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "plugin".to_string());
-    WasmStrategy::from_file(&module_path, name, &config).map(|s| Box::new(s) as Box<dyn Strategy>)
+    WasmStrategy::from_file(&module_path, name, &config, fee_service)
+        .map(|s| Box::new(s) as Box<dyn Strategy>)
 }

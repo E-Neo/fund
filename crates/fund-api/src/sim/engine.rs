@@ -1,13 +1,18 @@
 use crate::{
     eastmoney::Nav,
     error::{Error, Result},
-    rules::{OrderForFee, Rule},
+    rules::OrderForFee,
     sim::{
         event::{Event, Order, Transaction, TransactionKind},
+        fees::FeeService,
         state::{DailySnapshot, PortfolioState},
         strategy::{SimContext, Strategy},
     },
 };
+use std::collections::VecDeque;
+
+/// Guard against a strategy that keeps returning orders on `OrderExecuted`.
+const MAX_ORDERS_PER_DAY: usize = 10_000;
 
 pub struct SimulationResult {
     pub final_state: PortfolioState,
@@ -17,17 +22,18 @@ pub struct SimulationResult {
 
 pub fn simulate(
     navs: &[Nav],
-    fee_rule: &mut dyn Rule,
+    fee_service: &FeeService,
     strategy: &mut dyn Strategy,
     capital: f64,
 ) -> Result<SimulationResult> {
     let mut state = PortfolioState::with_capital(capital);
     let mut transactions: Vec<Transaction> = Vec::new();
     let mut snapshots: Vec<DailySnapshot> = Vec::new();
-    let mut pending: Vec<Order> = Vec::new();
 
     for nav in navs {
-        let mut next_pending: Vec<Order> = Vec::new();
+        // Same-day settlement: decisions and executions both use today's nav.
+        fee_service.set_today(nav.date, nav.unit_nav);
+        let mut queue: VecDeque<Order> = VecDeque::new();
 
         dispatch(
             strategy,
@@ -35,26 +41,16 @@ pub fn simulate(
             nav,
             &state,
             &transactions,
-            &mut next_pending,
+            &mut queue,
         );
-
-        for order in pending {
-            let Some(transaction) = execute(&mut state, order, nav, fee_rule)? else {
-                continue;
-            };
-            transactions.push(transaction.clone());
-            dispatch(
-                strategy,
-                &Event::OrderExecuted {
-                    date: nav.date,
-                    transaction,
-                },
-                nav,
-                &state,
-                &transactions,
-                &mut next_pending,
-            );
-        }
+        drain(
+            &mut queue,
+            &mut state,
+            nav,
+            fee_service,
+            strategy,
+            &mut transactions,
+        )?;
 
         dispatch(
             strategy,
@@ -66,8 +62,16 @@ pub fn simulate(
             nav,
             &state,
             &transactions,
-            &mut next_pending,
+            &mut queue,
         );
+        drain(
+            &mut queue,
+            &mut state,
+            nav,
+            fee_service,
+            strategy,
+            &mut transactions,
+        )?;
 
         snapshots.push(DailySnapshot {
             date: nav.date,
@@ -86,10 +90,16 @@ pub fn simulate(
             nav,
             &state,
             &transactions,
-            &mut next_pending,
+            &mut queue,
         );
-
-        pending = next_pending;
+        drain(
+            &mut queue,
+            &mut state,
+            nav,
+            fee_service,
+            strategy,
+            &mut transactions,
+        )?;
     }
 
     Ok(SimulationResult {
@@ -99,13 +109,48 @@ pub fn simulate(
     })
 }
 
+/// Execute every queued order at the current day's nav, feeding each execution
+/// back to the strategy (which may enqueue more orders, also settled today).
+fn drain(
+    queue: &mut VecDeque<Order>,
+    state: &mut PortfolioState,
+    nav: &Nav,
+    fee_service: &FeeService,
+    strategy: &mut dyn Strategy,
+    transactions: &mut Vec<Transaction>,
+) -> Result<()> {
+    let mut processed = 0;
+    while let Some(order) = queue.pop_front() {
+        processed += 1;
+        if processed > MAX_ORDERS_PER_DAY {
+            break;
+        }
+        let Some(transaction) = execute(state, order, nav, fee_service)? else {
+            continue;
+        };
+        transactions.push(transaction.clone());
+        dispatch(
+            strategy,
+            &Event::OrderExecuted {
+                date: nav.date,
+                transaction,
+            },
+            nav,
+            state,
+            transactions,
+            queue,
+        );
+    }
+    Ok(())
+}
+
 fn dispatch(
     strategy: &mut dyn Strategy,
     event: &Event,
     nav: &Nav,
     state: &PortfolioState,
     transactions: &[Transaction],
-    out: &mut Vec<Order>,
+    out: &mut VecDeque<Order>,
 ) {
     let mut ctx = SimContext {
         date: nav.date,
@@ -121,7 +166,7 @@ fn execute(
     state: &mut PortfolioState,
     order: Order,
     nav: &Nav,
-    fee_rule: &mut dyn Rule,
+    fee_service: &FeeService,
 ) -> Result<Option<Transaction>> {
     match order {
         Order::Invest { amount } => {
@@ -130,7 +175,7 @@ fn execute(
             if amount <= 0.0 {
                 return Ok(None);
             }
-            let fee = fee_rule.fee(OrderForFee::Invest {
+            let fee = fee_service.apply(OrderForFee::Invest {
                 date: nav.date,
                 unit_nav: nav.unit_nav,
                 amount,
@@ -148,10 +193,15 @@ fn execute(
             }))
         }
         Order::Redeem { shares } => {
-            if state.holding_share < shares {
+            // Tolerate IEEE-754 rounding between a strategy's own lot
+            // bookkeeping and the engine's running share total; a genuine
+            // over-redeem (beyond a relative epsilon) is still an error.
+            let tolerance = state.holding_share.abs() * 1e-9 + 1e-9;
+            if shares > state.holding_share + tolerance {
                 return Err(Error::Insufficient);
             }
-            let fee = fee_rule.fee(OrderForFee::Redeem {
+            let shares = shares.min(state.holding_share);
+            let fee = fee_service.apply(OrderForFee::Redeem {
                 date: nav.date,
                 unit_nav: nav.unit_nav,
                 shares,
@@ -188,8 +238,14 @@ mod tests {
             .collect()
     }
 
+    fn run(strategy: &mut dyn Strategy, capital: f64) -> Result<SimulationResult> {
+        let navs = navs();
+        let fee = FeeService::new(Box::new(Fifo::new(vec![], vec![])), navs[0].date);
+        simulate(&navs, &fee, strategy, capital)
+    }
+
     #[test]
-    fn test_invest_then_redeem_t_plus_one() {
+    fn test_invest_then_redeem_same_day() {
         struct BuyThenSell {
             step: u32,
         }
@@ -212,16 +268,15 @@ mod tests {
             }
         }
 
-        let mut fee_rule = Fifo::new(vec![], vec![]);
         let mut strategy = BuyThenSell { step: 0 };
-        let result = simulate(&navs(), &mut fee_rule, &mut strategy, 1000.0).unwrap();
+        let result = run(&mut strategy, 1000.0).unwrap();
 
-        // Invest executes on day 2's nav (1.05) -> 100 / 1.05 shares.
-        // Redeem executes on day 3's nav (1.0) -> 50 shares sold.
+        // Same-day: invest on day 0's nav (1.0) -> 100 shares; redeem 50 on
+        // day 1's nav (1.05).
         assert_eq!(result.transactions.len(), 2);
-        assert_eq!(result.final_state.holding_share, 100.0 / 1.05 - 50.0);
+        assert_eq!(result.final_state.holding_share, 100.0 - 50.0);
         assert_eq!(result.final_state.cumulative_investment, 100.0);
-        assert_eq!(result.final_state.cumulative_redemption, 50.0 * 1.0);
+        assert_eq!(result.final_state.cumulative_redemption, 50.0 * 1.05);
     }
 
     #[test]
@@ -248,9 +303,8 @@ mod tests {
             }
         }
 
-        let mut fee_rule = Fifo::new(vec![], vec![]);
         let mut strategy = BuyThenOversell { step: 0 };
-        let result = simulate(&navs(), &mut fee_rule, &mut strategy, 1000.0);
+        let result = run(&mut strategy, 1000.0);
         assert!(matches!(result, Err(Error::Insufficient)));
     }
 
@@ -264,24 +318,22 @@ mod tests {
                 "clamp"
             }
             fn on_event(&mut self, event: &Event, _ctx: &mut SimContext) -> Vec<Order> {
-                if !self.done {
-                    if let Event::NavUpdate { .. } = event {
-                        self.done = true;
-                        return vec![Order::Invest { amount: 500.0 }];
-                    }
+                if !self.done
+                    && let Event::NavUpdate { .. } = event
+                {
+                    self.done = true;
+                    return vec![Order::Invest { amount: 500.0 }];
                 }
                 Vec::new()
             }
         }
 
-        let mut fee_rule = Fifo::new(vec![], vec![]);
         let mut strategy = Clamp { done: false };
-        let result = simulate(&navs(), &mut fee_rule, &mut strategy, 200.0).unwrap();
-        // Order placed on day 1's NavUpdate executes at day 2's nav (1.05),
-        // clamped to the available capital of 200.
+        let result = run(&mut strategy, 200.0).unwrap();
+        // Clamped to the available capital of 200, invested on day 0's nav (1.0).
         assert_eq!(result.transactions.len(), 1);
         assert_eq!(result.final_state.cumulative_investment, 200.0);
-        assert_eq!(result.final_state.holding_share, 200.0 / 1.05);
+        assert_eq!(result.final_state.holding_share, 200.0 / 1.0);
         assert_eq!(result.final_state.cash, 0.0);
     }
 
@@ -295,19 +347,18 @@ mod tests {
                 "skip"
             }
             fn on_event(&mut self, event: &Event, _ctx: &mut SimContext) -> Vec<Order> {
-                if !self.done {
-                    if let Event::NavUpdate { .. } = event {
-                        self.done = true;
-                        return vec![Order::Invest { amount: 500.0 }];
-                    }
+                if !self.done
+                    && let Event::NavUpdate { .. } = event
+                {
+                    self.done = true;
+                    return vec![Order::Invest { amount: 500.0 }];
                 }
                 Vec::new()
             }
         }
 
-        let mut fee_rule = Fifo::new(vec![], vec![]);
         let mut strategy = Skip { done: false };
-        let result = simulate(&navs(), &mut fee_rule, &mut strategy, 0.0).unwrap();
+        let result = run(&mut strategy, 0.0).unwrap();
         // No cash to invest: the order is skipped entirely.
         assert_eq!(result.transactions.len(), 0);
         assert_eq!(result.final_state.cumulative_investment, 0.0);
