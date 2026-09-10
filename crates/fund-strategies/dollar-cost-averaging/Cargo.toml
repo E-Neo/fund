@@ -9,6 +9,7 @@ name = "dollar_cost_averaging"
 crate-type = ["cdylib"]
 
 [dependencies]
+schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 wit-bindgen.workspace = true

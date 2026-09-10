@@ -4,34 +4,27 @@ wit_bindgen::generate!({
 });
 
 use exports::fund::strategy::trader::{Event, Order};
+use schemars::JsonSchema;
 use serde::Deserialize;
 use std::sync::Mutex;
 
-/// JSON Schema describing the DCA hyperparameters.
-const CONFIG_SCHEMA: &str = r#"{
-  "type": "object",
-  "properties": {
-    "amount": {
-      "type": "number",
-      "minimum": 0.0,
-      "default": 100.0,
-      "title": "Amount",
-      "description": "Amount to invest on each buy day."
-    },
-    "interval": {
-      "type": "integer",
-      "minimum": 1,
-      "default": 7,
-      "title": "Interval (days)",
-      "description": "Buy every N trading days."
-    }
-  },
-  "required": ["amount", "interval"]
-}"#;
+fn default_amount() -> f64 {
+    100.0
+}
 
-#[derive(Deserialize)]
+fn default_interval() -> u64 {
+    7
+}
+
+#[derive(Deserialize, JsonSchema)]
 struct DcaParams {
+    /// Amount to invest on each buy day.
+    #[serde(default = "default_amount")]
+    #[schemars(range(min = 0.0), default = "default_amount", title = "Amount")]
     amount: f64,
+    /// Buy every N trading days.
+    #[serde(default = "default_interval")]
+    #[schemars(range(min = 1), default = "default_interval", title = "Interval (days)")]
     interval: u64,
 }
 
@@ -55,7 +48,7 @@ impl exports::fund::strategy::trader::Guest for FundStrategies {
     }
 
     fn config_schema() -> String {
-        CONFIG_SCHEMA.to_string()
+        serde_json::to_string(&schemars::schema_for!(DcaParams)).unwrap()
     }
 
     fn init(config: String) -> Result<(), String> {
