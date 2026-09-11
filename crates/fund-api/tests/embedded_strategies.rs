@@ -220,3 +220,66 @@ fn dip_take_profit_handles_same_day_buy_and_redeem() -> Result<()> {
     assert!(result.transactions.len() >= 4);
     Ok(())
 }
+
+#[test]
+fn dip_take_profit_requires_consecutive_days() -> Result<()> {
+    // n=3: buys only on day 4, when the run has 3 consecutive down days and
+    // its cumulative drop from the pre-streak peak (1.0) reaches 6%.
+    let navs = price_navs(&[1.0, 0.98, 0.95, 0.94, 1.05]);
+    let fee_rule = FeeRule::default();
+    let fee_service = Arc::new(service(&navs, &fee_rule));
+    let ctx = strategy::StrategyCtx {
+        navs: &navs,
+        fee_rule: &fee_rule,
+        fee_service: Arc::clone(&fee_service),
+        capital: 1000.0,
+    };
+    let params = serde_json::json!({
+        "amount": 100,
+        "consecutive_days": 3,
+        "drop_pct": 5,
+        "take_profit_pct": 10
+    });
+    let mut strategy = strategy::load(
+        &strategy::StrategyArg::Bundled("Dip Take Profit".to_string()),
+        &params,
+        &ctx,
+    )?;
+    let result = engine::simulate(&navs, &fee_service, strategy.as_mut(), 1000.0)?;
+    // Bought 100 at 0.94 (100/0.94 shares), redeemed at 1.05: net 111.70,
+    // so cash = 1000 - 100 + 111.70 = 1011.70.
+    assert_eq!(result.transactions.len(), 2);
+    assert!((result.final_state.cash - 1011.702).abs() < 0.01);
+    Ok(())
+}
+
+#[test]
+fn dip_take_profit_breaks_streak_on_up_day() -> Result<()> {
+    // n=2: day 2 drops 7% but is only a single down day; day 3 breaks the
+    // streak; day 4's single down day from 0.95 (5.3% drop) never reaches
+    // n=2, so no buy happens at all.
+    let navs = price_navs(&[1.0, 0.93, 0.95, 0.90, 1.0]);
+    let fee_rule = FeeRule::default();
+    let fee_service = Arc::new(service(&navs, &fee_rule));
+    let ctx = strategy::StrategyCtx {
+        navs: &navs,
+        fee_rule: &fee_rule,
+        fee_service: Arc::clone(&fee_service),
+        capital: 1000.0,
+    };
+    let params = serde_json::json!({
+        "amount": 100,
+        "consecutive_days": 2,
+        "drop_pct": 5,
+        "take_profit_pct": 10
+    });
+    let mut strategy = strategy::load(
+        &strategy::StrategyArg::Bundled("Dip Take Profit".to_string()),
+        &params,
+        &ctx,
+    )?;
+    let result = engine::simulate(&navs, &fee_service, strategy.as_mut(), 1000.0)?;
+    assert_eq!(result.transactions.len(), 0);
+    assert_eq!(result.final_state.cash, 1000.0);
+    Ok(())
+}

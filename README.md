@@ -67,9 +67,10 @@ POST /api/backtest                   run a backtest (BacktestInput -> BacktestRe
 ## Strategies
 
 - `Dollar Cost Averaging`: invest a fixed amount on a regular schedule.
-- `Dip Take Profit`: keep a FILO stack of fixed-size lots; buy when the price
-  drops a threshold percent below the previous session, and redeem the most
-  recent lot once its net gain (after fees) reaches a target percent.
+- `Dip Take Profit`: keep a FILO stack of fixed-size lots; buy once the
+  price has fallen over `n` consecutive down days and the cumulative drop from
+  the pre-streak peak reaches a threshold percent, and redeem the most recent
+  lot once its net gain (after fees) reaches a target percent.
 - `Oracle` (virtual): sees the full history and future of a fund and greedily
   captures every profitable swing. Not a real strategy — it cannot be
   implemented with the guest interface because it knows the future.
