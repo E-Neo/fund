@@ -7,8 +7,8 @@ const W: f64 = 800.0;
 const H: f64 = 320.0;
 const PAD_R: f64 = 20.0;
 const PAD_T: f64 = 36.0;
-const PAD_B: f64 = 48.0;
-const Y_LABEL_X: f64 = 14.0;
+const PAD_B: f64 = 64.0;
+const Y_LABEL_X: f64 = 10.0;
 /// Movement (viewBox px) allowed while holding before it stops being a hold.
 const HOLD_TOLERANCE: f64 = 15.0;
 /// How long a finger must hold still before a selection starts.
@@ -49,13 +49,14 @@ fn max_decimals(series: &[Series]) -> u32 {
     series.iter().map(|ser| ser.decimals).max().unwrap_or(2)
 }
 
-/// Width of the widest y-label for the range, used as the left padding.
+/// Width of the widest y-label for the range, plus a fixed column for the
+/// rotated y axis title, used as the left padding.
 fn pad_l_for(lo: f64, hi: f64, decimals: u32) -> f64 {
-    let mut max: f64 = 40.0;
+    let mut max: f64 = 46.0;
     for k in 0..=4 {
         let v = lo + (hi - lo) * k as f64 / 4.0;
         let text = fmt_val(v, decimals);
-        max = max.max(text.len() as f64 * 7.0 + 10.0);
+        max = max.max(text.len() as f64 * 7.0 + 32.0);
     }
     max
 }
@@ -147,6 +148,10 @@ pub fn Chart(
     #[prop(optional)] title: Option<String>,
     #[prop(optional)] x_label: Option<String>,
     #[prop(optional)] y_label: Option<String>,
+    /// Show the hovered value's percentage change over the first visible
+    /// point of the same series, beside the value label.
+    #[prop(optional)]
+    range_change: bool,
 ) -> impl IntoView {
     let title = title.unwrap_or_default();
     let x_label = x_label.unwrap_or_else(|| "Date".to_string());
@@ -691,10 +696,34 @@ pub fn Chart(
                     {fmt_val(pv.market_value, pdec)}
                 </text>
             };
+            // Percentage change of the hovered value over the first visible
+            // point of the same series, rendered beside the value label.
+            let pct_label = if range_change {
+                let base = hov_points
+                    .get(pk)
+                    .and_then(|ser| ser.points.get(s))
+                    .map(|p| p.market_value)
+                    .filter(|b| *b != 0.0);
+                if let Some(b) = base {
+                    let pct = (pv.market_value - b) / b * 100.0;
+                    let color = if pct >= 0.0 { "#2f855a" } else { "#c53030" };
+                    view! {
+                        <text x={pad_l-4.0} y=y_y class="crosshair" text-anchor="start" fill=color>
+                            {format!("{pct:+.2}%")}
+                        </text>
+                    }
+                    .into_any()
+                } else {
+                    ().into_any()
+                }
+            } else {
+                ().into_any()
+            };
             Some(view! {
                 <circle cx=x cy=y r="3" fill="#333"/>
                 {x_label}
                 {y_label}
+                {pct_label}
             })
         })
     };
@@ -768,26 +797,34 @@ pub fn Chart(
                     <g class="grid" stroke="#ddd">
                         <path d=grid_path fill="none"/>
                     </g>
-                    {move || x_labels().into_iter().map(|(x, label, anchor)| view! {
-                        <text x=x y={H-16.0} class="axis" text-anchor=anchor>{label}</text>
-                    }).collect_view()}
-                    {move || y_labels().into_iter().map(|(y, v, pad_l, decimals)| view! {
-                        <text x={pad_l-8.0} y=y class="axis" text-anchor="end">{fmt_val(v, decimals)}</text>
-                    }).collect_view()}
-                    {move || if !x_label.is_empty() {
-                        view! { <text x={W/2.0} y={H-4.0} class="axis" text-anchor="middle">{x_label.clone()}</text> }.into_any()
-                    } else { ().into_any() }}
-                    {move || if !y_label.is_empty() {
-                        view! {
-                            <text
-                                transform=format!("rotate(-90 {left} {cy})", left=Y_LABEL_X, cy=H/2.0)
-                                x={Y_LABEL_X}
-                                y={H/2.0}
-                                class="axis"
-                                text-anchor="middle"
-                            >{y_label.clone()}</text>
-                        }.into_any()
-                    } else { ().into_any() }}
+                    <g class="x-ticks">
+                        {move || x_labels().into_iter().map(|(x, label, anchor)| view! {
+                            <text x=x y={H-28.0} class="axis" text-anchor=anchor>{label}</text>
+                        }).collect_view()}
+                    </g>
+                    <g class="y-ticks">
+                        {move || y_labels().into_iter().map(|(y, v, pad_l, decimals)| view! {
+                            <text x={pad_l-8.0} y=y class="axis" text-anchor="end">{fmt_val(v, decimals)}</text>
+                        }).collect_view()}
+                    </g>
+                    <g class="x-axis">
+                        {move || if !x_label.is_empty() {
+                            view! { <text x={W/2.0} y={H-8.0} class="axis" text-anchor="middle">{x_label.clone()}</text> }.into_any()
+                        } else { ().into_any() }}
+                    </g>
+                    <g class="y-axis">
+                        {move || if !y_label.is_empty() {
+                            view! {
+                                <text
+                                    transform=format!("rotate(-90 {left} {cy})", left=Y_LABEL_X, cy=H/2.0)
+                                    x={Y_LABEL_X}
+                                    y={H/2.0}
+                                    class="axis"
+                                    text-anchor="middle"
+                                >{y_label.clone()}</text>
+                            }.into_any()
+                        } else { ().into_any() }}
+                    </g>
                     {paths}
                     {markers}
                     {sel_rect}

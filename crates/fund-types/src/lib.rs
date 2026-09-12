@@ -58,6 +58,16 @@ pub struct BacktestMarker {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BacktestTransaction {
+    pub date: String,
+    pub kind: String,
+    pub unit_nav: f64,
+    pub amount: f64,
+    pub shares: f64,
+    pub fee: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BacktestReport {
     pub start: String,
     pub end: String,
@@ -70,6 +80,7 @@ pub struct BacktestReport {
     pub profit: f64,
     pub total_return_pct: f64,
     pub max_drawdown_pct: f64,
+    pub transactions_list: Vec<BacktestTransaction>,
     pub curve: Vec<CurvePoint>,
     pub nav_curve: Vec<CurvePoint>,
     pub markers: Vec<BacktestMarker>,

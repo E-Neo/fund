@@ -42,27 +42,14 @@ pub fn BacktestPage() -> impl IntoView {
         code.set(value.clone());
         if value.is_empty() {
             range.set(None);
-            start_date.set(String::new());
-            days.set(String::new());
             return;
         }
+        // Keep the user's From/Days as-is: an empty From means the fund's
+        // first NAV and empty Days means the fund's whole span.
         let future = api::fund_range(value);
         spawn_local(async move {
             match future.await {
-                Ok(r) => {
-                    start_date.set(r.from.clone());
-                    // Default the period to the fund's full calendar-day span.
-                    let from = chrono::NaiveDate::parse_from_str(&r.from, "%Y-%m-%d").ok();
-                    let to = chrono::NaiveDate::parse_from_str(&r.to, "%Y-%m-%d").ok();
-                    days.set(
-                        match (from, to) {
-                            (Some(f), Some(t)) => (t - f).num_days() + 1,
-                            _ => 0,
-                        }
-                        .to_string(),
-                    );
-                    range.set(Some(r));
-                }
+                Ok(r) => range.set(Some(r)),
                 Err(err) => leptos::logging::error!("failed to load range: {err}"),
             }
         });
@@ -234,6 +221,7 @@ pub fn BacktestPage() -> impl IntoView {
                             <Chart
                                 title="NAV".to_string()
                                 y_label="NAV".to_string()
+                                range_change=true
                                 series=build_nav_series(&report)
                             />
                         </div>
@@ -297,6 +285,33 @@ pub fn BacktestPage() -> impl IntoView {
                                     markers: vec![],
                                 }]
                             />
+                        </div>
+                        <h4>"Transactions"</h4>
+                        <div class="table-scroll">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>"Date"</th>
+                                        <th>"Type"</th>
+                                        <th>"NAV"</th>
+                                        <th>"Amount"</th>
+                                        <th>"Shares"</th>
+                                        <th>"Fee"</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {report.transactions_list.iter().map(|t| view! {
+                                        <tr>
+                                            <td>{t.date.clone()}</td>
+                                            <td>{t.kind.clone()}</td>
+                                            <td>{format!("{:.4}", t.unit_nav)}</td>
+                                            <td>{format!("{:.2}", t.amount)}</td>
+                                            <td>{format!("{:.4}", t.shares)}</td>
+                                            <td>{format!("{:.2}", t.fee)}</td>
+                                        </tr>
+                                    }).collect_view()}
+                                </tbody>
+                            </table>
                         </div>
                     </section>
                 })

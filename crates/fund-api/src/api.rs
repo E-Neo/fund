@@ -10,8 +10,8 @@ use axum::{
     routing::{get, post},
 };
 use fund_types::{
-    BacktestInput, BacktestMarker, BacktestReport, CurvePoint, FeeTier, FundInfo, NavPoint,
-    NavRange, StrategyInfo,
+    BacktestInput, BacktestMarker, BacktestReport, BacktestTransaction, CurvePoint, FeeTier,
+    FundInfo, NavPoint, NavRange, StrategyInfo,
 };
 use std::sync::Arc;
 
@@ -269,6 +269,31 @@ async fn run_backtest(Json(input): Json<BacktestInput>) -> Result<Json<BacktestR
         })
         .collect();
 
+    let transactions_list = result
+        .transactions
+        .iter()
+        .map(|t| {
+            let (kind, amount, shares, fee) = match t.kind {
+                crate::sim::event::TransactionKind::Invest {
+                    amount,
+                    shares,
+                    fee,
+                } => ("Buy".to_string(), amount, shares, fee),
+                crate::sim::event::TransactionKind::Redeem { shares, money, fee } => {
+                    ("Sell".to_string(), money, shares, fee)
+                }
+            };
+            BacktestTransaction {
+                date: t.date.to_string(),
+                kind,
+                unit_nav: t.unit_nav,
+                amount,
+                shares,
+                fee,
+            }
+        })
+        .collect();
+
     let mut peak = f64::NEG_INFINITY;
     let return_curve = result
         .snapshots
@@ -324,6 +349,7 @@ async fn run_backtest(Json(input): Json<BacktestInput>) -> Result<Json<BacktestR
         profit: report.profit,
         total_return_pct: report.total_return_pct,
         max_drawdown_pct: report.max_drawdown_pct,
+        transactions_list,
         curve,
         nav_curve,
         markers,

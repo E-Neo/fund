@@ -48,6 +48,7 @@ fn FundRow(fund: FundInfo, on_update: Arc<dyn Fn(String) + Send + Sync>) -> impl
                                     <Chart
                                         title=format!("NAV — {}", fund.name)
                                         y_label="NAV".to_string()
+                                        range_change=true
                                         series=vec![Series {
                                             points: list.iter().map(|n| CurvePoint {
                                                 date: n.date.clone(),
